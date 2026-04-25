@@ -17,6 +17,7 @@ export interface Purchase {
   cardId: string;
   date: string;
   categoryId: string;
+  status?: string;
 }
 
 export interface Category {

@@ -59,7 +59,8 @@ export function useFinancialData() {
           installments: p.installments,
           cardId: p.card_id,
           date: p.date,
-          categoryId: p.category_id
+          categoryId: p.category_id,
+          status: p.status || 'pending'
         })),
         categories: (categoriesData && categoriesData.length > 0) ? categoriesData : DEFAULT_CATEGORIES,
         paidInvoices: (paidInvoicesData || []).map(pi => `${pi.card_id}-${pi.month}-${pi.year}`),
@@ -81,6 +82,19 @@ export function useFinancialData() {
 
   useEffect(() => {
     fetchData();
+
+    // Configuração de Atualização em Tempo Real (Realtime)
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cards' }, () => fetchData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'purchases' }, () => fetchData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => fetchData())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'paid_invoices' }, () => fetchData())
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [fetchData]);
 
   const addNotification = useCallback(async (notif: Omit<AppNotification, 'id' | 'date' | 'read'>) => {
