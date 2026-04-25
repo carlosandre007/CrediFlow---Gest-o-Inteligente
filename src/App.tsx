@@ -367,7 +367,7 @@ export default function App() {
               )}
               {activeView === 'analysis' && (
                 <AnalysisView 
-                  cards={state.cards} 
+                  state={state}
                   installments={allInstallments} 
                 />
               )}
