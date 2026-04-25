@@ -17,7 +17,8 @@ export function useFinancialData() {
     cards: [],
     purchases: [],
     categories: DEFAULT_CATEGORIES,
-    paidInvoices: [],
+    invoices: [],
+    cardAdjustments: [],
     notifications: []
   });
   const [loading, setLoading] = useState(true);
@@ -27,17 +28,19 @@ export function useFinancialData() {
     try {
       setLoading(true);
       
-      const [
+        const [
         { data: cardsData },
         { data: purchasesData },
         { data: categoriesData },
-        { data: paidInvoicesData },
+        { data: invoicesData },
+        { data: cardAdjustmentsData },
         { data: notificationsData }
       ] = await Promise.all([
         supabase.from('cards').select('*'),
         supabase.from('purchases').select('*'),
         supabase.from('categories').select('*'),
-        supabase.from('paid_invoices').select('*'),
+        supabase.from('invoices').select('*'),
+        supabase.from('card_adjustments').select('*'),
         supabase.from('notifications').select('*').order('date', { ascending: false }).limit(10)
       ]);
 
@@ -50,7 +53,8 @@ export function useFinancialData() {
           dueDay: c.due_day,
           bank: c.bank,
           brand: c.brand,
-          color: c.color
+          color: c.color,
+          balance: c.balance ? Number(c.balance) : 0
         })),
         purchases: (purchasesData || []).map(p => ({
           id: p.id,
@@ -63,7 +67,24 @@ export function useFinancialData() {
           status: p.status || 'pending'
         })),
         categories: (categoriesData && categoriesData.length > 0) ? categoriesData : DEFAULT_CATEGORIES,
-        paidInvoices: (paidInvoicesData || []).map(pi => `${pi.card_id}-${pi.month}-${pi.year}`),
+        invoices: (invoicesData || []).map((i: any) => ({
+          id: i.id,
+          cardId: i.card_id,
+          month: i.month,
+          year: i.year,
+          totalAmount: Number(i.total_amount),
+          paidAmount: Number(i.paid_amount),
+          status: i.status as any,
+          paidAt: i.paid_at
+        })),
+        cardAdjustments: (cardAdjustmentsData || []).map((ca: any) => ({
+          id: ca.id,
+          cardId: ca.card_id,
+          amount: Number(ca.amount),
+          type: ca.type as any,
+          description: ca.description,
+          createdAt: ca.created_at
+        })),
         notifications: (notificationsData || []).map(n => ({
           id: n.id,
           title: n.title,
@@ -249,6 +270,169 @@ export function useFinancialData() {
     }
   }, [addNotification]);
 
+  const payInvoice = useCallback(async (cardId: string, month: number, year: number, totalAmount: number, paidAmount: number) => {
+    try {
+      let status = 'PAID';
+      let adjustmentAmount = 0;
+      let adjustmentType = '';
+
+      if (paidAmount < totalAmount) {
+        status = 'PARTIALLY_PAID';
+        adjustmentAmount = paidAmount - totalAmount; // Negative
+        adjustmentType = 'UNDERPAYMENT';
+      } else if (paidAmount > totalAmount) {
+        status = 'OVERPAID';
+        adjustmentAmount = paidAmount - totalAmount; // Positive
+        adjustmentType = 'OVERPAYMENT';
+      }
+
+      // Create Invoice
+      const { data: invoiceData, error: invoiceError } = await supabase.from('invoices').insert([{
+        card_id: cardId,
+        month,
+        year,
+        total_amount: totalAmount,
+        paid_amount: paidAmount,
+        status
+      }]).select().single();
+
+      if (invoiceError) throw invoiceError;
+
+      // Update Local Invoices State
+      const newInvoice = {
+        id: invoiceData.id,
+        cardId: invoiceData.card_id,
+        month: invoiceData.month,
+        year: invoiceData.year,
+        totalAmount: Number(invoiceData.total_amount),
+        paidAmount: Number(invoiceData.paid_amount),
+        status: invoiceData.status as any,
+        paidAt: invoiceData.paid_at
+      };
+
+      setState(prev => ({
+        ...prev,
+        invoices: [...prev.invoices, newInvoice]
+      }));
+
+      // Create Adjustment if needed
+      if (adjustmentAmount !== 0) {
+        const { data: adjData, error: adjError } = await supabase.from('card_adjustments').insert([{
+          card_id: cardId,
+          amount: adjustmentAmount,
+          type: adjustmentType,
+          description: `Ajuste gerado pelo pagamento da fatura ${month}/${year}`
+        }]).select().single();
+
+        if (adjError) throw adjError;
+
+        const newAdjustment = {
+          id: adjData.id,
+          cardId: adjData.card_id,
+          amount: Number(adjData.amount),
+          type: adjData.type as any,
+          description: adjData.description,
+          createdAt: adjData.created_at
+        };
+
+        // Update card balance
+        const cardToUpdate = state.cards.find(c => c.id === cardId);
+        if (cardToUpdate) {
+          const newBalance = (cardToUpdate.balance || 0) + adjustmentAmount;
+          await supabase.from('cards').update({ balance: newBalance }).eq('id', cardId);
+          
+          setState(prev => ({
+            ...prev,
+            cardAdjustments: [...prev.cardAdjustments, newAdjustment],
+            cards: prev.cards.map(c => c.id === cardId ? { ...c, balance: newBalance } : c)
+          }));
+        }
+      }
+
+      addNotification({
+        title: 'Fatura Paga',
+        message: `Pagamento de ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(paidAmount)} registrado.`,
+        type: 'system'
+      });
+    } catch (error: any) {
+      console.error('Error paying invoice:', error);
+      alert('Erro ao pagar a fatura: ' + (error.message || 'Erro desconhecido. Lembre-se de rodar a Migration de banco de dados.'));
+    }
+  }, [state.cards, addNotification]);
+
+  const updatePurchase = useCallback(async (id: string, updates: Partial<Omit<Purchase, 'id'>>) => {
+    try {
+      const dbUpdates: any = {};
+      if (updates.name !== undefined) dbUpdates.name = updates.name;
+      if (updates.totalValue !== undefined) dbUpdates.total_value = updates.totalValue;
+      if (updates.installments !== undefined) dbUpdates.installments = updates.installments;
+      if (updates.cardId !== undefined) dbUpdates.card_id = updates.cardId;
+      if (updates.categoryId !== undefined) dbUpdates.category_id = updates.categoryId;
+      if (updates.date !== undefined) dbUpdates.date = updates.date;
+      if (updates.status !== undefined) dbUpdates.status = updates.status;
+
+      const { error } = await supabase.from('purchases').update(dbUpdates).eq('id', id);
+      if (error) throw error;
+
+      setState(prev => ({
+        ...prev,
+        purchases: prev.purchases.map(p => p.id === id ? { ...p, ...updates } : p)
+      }));
+
+      addNotification({
+        title: 'Compra Atualizada',
+        message: `As alterações no lançamento foram salvas.`,
+        type: 'purchase'
+      });
+    } catch (error: any) {
+      console.error('Error updating purchase:', error);
+      alert('Erro ao atualizar o lançamento: ' + (error.message || 'Erro desconhecido'));
+    }
+  }, [addNotification]);
+
+  const bulkImportPurchases = useCallback(async (purchases: Omit<Purchase, 'id'>[]) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      const insertData = purchases.map(p => ({
+        name: p.name,
+        total_value: p.totalValue,
+        installments: p.installments,
+        card_id: p.cardId,
+        category_id: p.categoryId,
+        date: p.date,
+        user_id: user?.id
+      }));
+
+      const { data, error } = await supabase.from('purchases').insert(insertData).select();
+
+      if (error) throw error;
+
+      if (data) {
+        const newPurchases: Purchase[] = data.map(p => ({
+          id: p.id,
+          name: p.name,
+          totalValue: p.total_value,
+          installments: p.installments,
+          cardId: p.card_id,
+          date: p.date,
+          categoryId: p.category_id,
+          status: p.status || 'pending'
+        }));
+        
+        setState(prev => ({ ...prev, purchases: [...prev.purchases, ...newPurchases] }));
+        addNotification({
+          title: 'Importação Concluída',
+          message: `${purchases.length} lançamentos foram importados com sucesso.`,
+          type: 'purchase'
+        });
+      }
+    } catch (error: any) {
+      console.error('Error in bulk import:', error);
+      throw error;
+    }
+  }, [addNotification]);
+
   const addCategory = useCallback(async (category: Omit<Category, 'id'>) => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -350,9 +534,11 @@ export function useFinancialData() {
     await Promise.all([
       supabase.from('cards').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
       supabase.from('purchases').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
-      supabase.from('notifications').delete().neq('id', '00000000-0000-0000-0000-000000000000')
+      supabase.from('notifications').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      supabase.from('invoices').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      supabase.from('card_adjustments').delete().neq('id', '00000000-0000-0000-0000-000000000000')
     ]);
-    setState({ cards: [], purchases: [], categories: DEFAULT_CATEGORIES, paidInvoices: [], notifications: [] });
+    setState({ cards: [], purchases: [], categories: DEFAULT_CATEGORIES, invoices: [], cardAdjustments: [], notifications: [] });
   }, []);
 
   const allInstallments = state.purchases.flatMap(purchase => {
@@ -367,13 +553,16 @@ export function useFinancialData() {
     addCard,
     updateCard,
     addPurchase,
+    updatePurchase,
     addCategory,
     updateCategory,
     deleteCard,
     deletePurchase,
     deleteCategory,
     toggleInvoicePaid,
+    payInvoice,
     markNotificationsRead,
+    bulkImportPurchases,
     resetData,
     allInstallments,
     refreshData: fetchData

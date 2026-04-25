@@ -7,7 +7,8 @@ interface PurchaseFormProps {
   cards: { id: string, name: string }[];
   categories: Category[];
   initialCardId?: string;
-  onSubmit: (purchase: Omit<Purchase, 'id'>) => void;
+  initialPurchase?: Purchase;
+  onSubmit: (purchase: Omit<Purchase, 'id'>, id?: string) => void;
   onCancel: () => void;
   onAddCategory: (category: Omit<Category, 'id'>) => void;
   onUpdateCategory: (id: string, updates: Partial<Omit<Category, 'id'>>) => void;
@@ -17,7 +18,8 @@ interface PurchaseFormProps {
 export function PurchaseForm({ 
   cards, 
   categories, 
-  initialCardId, 
+  initialCardId,
+  initialPurchase,
   onSubmit, 
   onCancel, 
   onAddCategory,
@@ -25,12 +27,13 @@ export function PurchaseForm({
   onDeleteCategory
 }: PurchaseFormProps) {
   const [formData, setFormData] = useState<Omit<Purchase, 'id'>>({
-    name: '',
-    totalValue: 0,
-    installments: 1,
-    cardId: initialCardId || cards[0]?.id || '',
-    date: new Date().toISOString().split('T')[0],
-    categoryId: categories[0]?.id || '',
+    name: initialPurchase?.name || '',
+    totalValue: initialPurchase?.totalValue || 0,
+    installments: initialPurchase?.installments || 1,
+    cardId: initialPurchase?.cardId || initialCardId || cards[0]?.id || '',
+    date: initialPurchase?.date || new Date().toISOString().split('T')[0],
+    categoryId: initialPurchase?.categoryId || categories[0]?.id || '',
+    status: initialPurchase?.status || 'pending'
   });
 
   const [isManagingCategories, setIsManagingCategories] = useState(false);
@@ -42,7 +45,7 @@ export function PurchaseForm({
     e.preventDefault();
     if (!formData.cardId) return alert('Selecione um cartão');
     if (!formData.categoryId) return alert('Selecione uma categoria');
-    onSubmit(formData);
+    onSubmit(formData, initialPurchase?.id);
   };
 
   const handleAddOrUpdateCategory = () => {
@@ -70,7 +73,7 @@ export function PurchaseForm({
       <div className="flex items-center justify-between mb-8">
         <div>
           <h2 className="text-2xl font-bold text-slate-800">
-            {isManagingCategories ? 'Gerenciar Categorias' : 'Nova Compra'}
+            {isManagingCategories ? 'Gerenciar Categorias' : (initialPurchase ? 'Editar Compra' : 'Nova Compra')}
           </h2>
           <p className="text-sm text-slate-500">
             {isManagingCategories ? 'Adicione ou edite suas categorias.' : 'Registre gastos e controle parcelas.'}
@@ -206,7 +209,7 @@ export function PurchaseForm({
               disabled={cards.length === 0}
               className="flex-2 bg-violet-600 hover:bg-violet-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-violet-200 transition-all active:scale-95 disabled:opacity-50"
             >
-              Confirmar Compra
+              {initialPurchase ? 'Salvar Alterações' : 'Confirmar Compra'}
             </button>
           </div>
         </form>

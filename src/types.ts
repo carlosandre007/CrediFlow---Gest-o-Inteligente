@@ -7,6 +7,7 @@ export interface Card {
   bank: string;
   brand: string;
   color: string;
+  balance?: number;
 }
 
 export interface Purchase {
@@ -40,18 +41,31 @@ export interface Installment {
 }
 
 export enum InvoiceStatus {
-  OPEN = 'Aberta',
-  CLOSED = 'Fechada',
-  PAID = 'Paga',
+  OPEN = 'OPEN',
+  CLOSED = 'CLOSED',
+  PAID = 'PAID',
+  PARTIALLY_PAID = 'PARTIALLY_PAID',
+  OVERPAID = 'OVERPAID'
 }
 
 export interface Invoice {
+  id: string;
   cardId: string;
   month: number;
   year: number;
+  totalAmount: number;
+  paidAmount: number;
   status: InvoiceStatus;
-  installments: Installment[];
-  total: number;
+  paidAt?: string;
+}
+
+export interface CardAdjustment {
+  id: string;
+  cardId: string;
+  amount: number;
+  type: 'OVERPAYMENT' | 'UNDERPAYMENT' | 'REFUND' | 'MANUAL_ADJUSTMENT';
+  description?: string;
+  createdAt: string;
 }
 
 export interface AppNotification {
@@ -67,6 +81,7 @@ export interface FinancialState {
   cards: Card[];
   purchases: Purchase[];
   categories: Category[];
-  paidInvoices: string[]; // List of cardId-month-year
+  invoices: Invoice[]; 
+  cardAdjustments: CardAdjustment[];
   notifications: AppNotification[];
 }

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { ShoppingBag, Trash2, Calendar, CreditCard, Tag, XCircle } from 'lucide-react';
+import { ShoppingBag, Trash2, Calendar, CreditCard, Tag, XCircle, Edit2 } from 'lucide-react';
 import { Purchase, Card, Category } from '../types';
 import { formatCurrency, formatDate, cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
@@ -9,9 +9,10 @@ interface PurchasesListProps {
   cards: Card[];
   categories: Category[];
   onDeletePurchase: (id: string) => void;
+  onEditPurchase: (purchase: Purchase) => void;
 }
 
-export function PurchasesList({ purchases, cards, categories, onDeletePurchase }: PurchasesListProps) {
+export function PurchasesList({ purchases, cards, categories, onDeletePurchase, onEditPurchase }: PurchasesListProps) {
   const [filterCategoryId, setFilterCategoryId] = useState<string | null>(null);
 
   const filteredPurchases = useMemo(() => {
@@ -137,12 +138,22 @@ export function PurchasesList({ purchases, cards, categories, onDeletePurchase }
                       )}
                     </td>
                     <td className="px-6 py-4 text-right whitespace-nowrap">
-                      <button 
-                        onClick={() => onDeletePurchase(purchase.id)}
-                        className="p-2 text-slate-300 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button 
+                          onClick={() => onEditPurchase(purchase)}
+                          className="p-2 text-slate-300 hover:text-violet-500 transition-colors"
+                          title="Editar lançamento"
+                        >
+                          <Edit2 size={16} />
+                        </button>
+                        <button 
+                          onClick={() => onDeletePurchase(purchase.id)}
+                          className="p-2 text-slate-300 hover:text-rose-500 transition-colors"
+                          title="Excluir lançamento"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
                     </td>
                   </motion.tr>
                 ))

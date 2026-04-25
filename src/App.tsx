@@ -33,7 +33,9 @@ import { AnalysisView } from './components/AnalysisView';
 import { PurchasesList } from './components/PurchasesList';
 import { NotificationDropdown } from './components/NotificationDropdown';
 import { supabase } from './lib/supabase';
-import { LogOut, Download } from 'lucide-react';
+import { LogOut, Download, FileText } from 'lucide-react';
+import { InvoiceScanner } from './components/InvoiceScanner';
+import { ExtractedInvoiceData } from './lib/ai';
 
 import { Login } from './components/Login';
 import { InstallPWA } from './components/InstallPWA';
@@ -44,6 +46,7 @@ export default function App() {
   const [user, setUser] = React.useState<{ name: string, identifier: string } | null>(null);
   const [activeView, setActiveView] = useState<View>('dashboard');
   const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [editingPurchase, setEditingPurchase] = useState<Purchase | null>(null);
 
   React.useEffect(() => {
     // Check active sessions and sets the user
@@ -127,18 +130,22 @@ export default function App() {
     addCard, 
     updateCard,
     addPurchase, 
+    updatePurchase,
     addCategory, 
     updateCategory, 
     deleteCategory, 
     deleteCard, 
     deletePurchase, 
-    toggleInvoicePaid, 
+    toggleInvoicePaid,
+    payInvoice, 
     markNotificationsRead,
+    bulkImportPurchases,
     allInstallments 
   } = useFinancialData();
   const [isPurchaseModalOpen, setIsPurchaseModalOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [preSelectedCardId, setPreSelectedCardId] = useState<string | undefined>(undefined);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
 
   const unreadNotifications = (state.notifications || []).filter(n => !n.read).length;
 
@@ -186,7 +193,27 @@ export default function App() {
 
   const handleOpenPurchaseModal = (cardId?: string) => {
     setPreSelectedCardId(cardId);
+    setEditingPurchase(null);
     setIsPurchaseModalOpen(true);
+  };
+
+  const handleEditPurchase = (purchase: Purchase) => {
+    setEditingPurchase(purchase);
+    setIsPurchaseModalOpen(true);
+  };
+
+  const handleImportFromScanner = async (data: ExtractedInvoiceData, cardId: string) => {
+    const purchasesToImport = data.transactions.map(t => ({
+      name: t.description,
+      totalValue: t.amount,
+      installments: t.total_installments,
+      cardId: cardId,
+      categoryId: '00000000-0000-0000-0000-000000000006', // Categoria 'Outros' por padrão
+      date: t.date,
+      status: 'pending'
+    }));
+
+    await bulkImportPurchases(purchasesToImport);
   };
 
   return (
@@ -218,7 +245,8 @@ export default function App() {
           ))}
         </nav>
 
-        <div className="p-4 border-t border-slate-100">
+        <div className="p-4 border-t border-slate-100 space-y-2">
+
           <button 
             onClick={() => handleOpenPurchaseModal()}
             className="w-full bg-violet-600 hover:bg-violet-700 text-white rounded-xl py-3 flex items-center justify-center gap-2 font-medium shadow-lg shadow-violet-200 transition-all active:scale-95"
@@ -308,6 +336,7 @@ export default function App() {
                   state={state} 
                   installments={allInstallments} 
                   onAddPurchase={() => handleOpenPurchaseModal()}
+                  payInvoice={payInvoice}
                 />
               )}
               {activeView === 'cards' && (
@@ -325,6 +354,7 @@ export default function App() {
                   cards={state.cards} 
                   categories={state.categories}
                   onDeletePurchase={deletePurchase} 
+                  onEditPurchase={handleEditPurchase}
                 />
               )}
               {activeView === 'invoices' && (
@@ -381,20 +411,38 @@ export default function App() {
                cards={state.cards} 
                categories={state.categories}
                initialCardId={preSelectedCardId}
+               initialPurchase={editingPurchase || undefined}
                onAddCategory={addCategory}
                onUpdateCategory={updateCategory}
                onDeleteCategory={deleteCategory}
-               onSubmit={(p) => {
-                 addPurchase(p);
+               onSubmit={(p, id) => {
+                 if (id) {
+                   updatePurchase(id, p);
+                 } else {
+                   addPurchase(p);
+                 }
                  setIsPurchaseModalOpen(false);
+                 setEditingPurchase(null);
                }}
-               onCancel={() => setIsPurchaseModalOpen(false)}
+               onCancel={() => {
+                 setIsPurchaseModalOpen(false);
+                 setEditingPurchase(null);
+               }}
             />
           </motion.div>
         </div>
       )}
       {/* PWA Install Prompt */}
       <InstallPWA />
+
+      {/* Invoice Scanner Modal */}
+      {isScannerOpen && (
+        <InvoiceScanner 
+          cards={state.cards} 
+          onImport={handleImportFromScanner}
+          onClose={() => setIsScannerOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -26,87 +26,166 @@ import { formatCurrency, cn } from '../lib/utils';
 import { startOfMonth, subMonths, format, addMonths, isWithinInterval, addDays, set, isSameMonth, startOfDay, endOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
+import { ChevronLeft, ChevronRight, CheckCircle } from 'lucide-react';
 
 interface DashboardProps {
   state: FinancialState;
   installments: Installment[];
   onAddPurchase: () => void;
+  payInvoice: (cardId: string, month: number, year: number, totalAmount: number, paidAmount: number) => Promise<void>;
 }
 
-export function Dashboard({ state, installments = [], onAddPurchase }: DashboardProps) {
+// Utilitário para descobrir o ciclo exato do cartão em um dado mês alvo
+function getCardCycleForMonth(card: Card, targetMonth: Date) {
+  const year = targetMonth.getFullYear();
+  const month = targetMonth.getMonth();
+
+  let start = new Date(year, month, card.closingDay);
+  start = subMonths(start, 1);
+
+  let end = new Date(year, month, card.closingDay);
+  let due = new Date(year, month, card.dueDay);
+
+  if (card.dueDay < card.closingDay) {
+    due = addMonths(due, 1);
+  }
+
+  return { start, end, due };
+}
+
+export function Dashboard({ state, installments = [], onAddPurchase, payInvoice }: DashboardProps) {
   if (!state || !state.cards) {
     return <div className="p-8 text-center text-slate-500">Carregando dados do dashboard...</div>;
   }
 
   const [selectedCardForDetail, setSelectedCardForDetail] = useState<Card | null>(null);
-  const currentMonth = new Date();
+  const [selectedMonth, setSelectedMonth] = useState<Date>(startOfMonth(new Date()));
+  const [paymentModalCard, setPaymentModalCard] = useState<{ card: Card, invoiceValue: number, month: number, year: number } | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  
   const today = startOfDay(new Date());
   const next6Days = endOfDay(addDays(today, 6));
 
-  // Função Sênior: Define o Ciclo de Faturamento Real do Cartão (Blindada contra variações de dias no mês)
-  const getCardCycle = useCallback((card: Card) => {
-    if (!card || !card.closingDay) return null;
-    
-    const now = new Date();
-    // Define o fechamento alvo como sendo o deste mês
-    let targetClosing = set(now, { 
-      date: card.closingDay, 
-      hours: 23, 
-      minutes: 59, 
-      seconds: 59, 
-      milliseconds: 999 
-    });
-    
-    // Se hoje já passou do fechamento, a fatura que estamos acumulando é a do mês que vem
-    if (now > targetClosing) {
-      targetClosing = addMonths(targetClosing, 1);
-    }
+  const handlePrevMonth = () => setSelectedMonth(prev => subMonths(prev, 1));
+  const handleNextMonth = () => setSelectedMonth(prev => addMonths(prev, 1));
 
-    const cycleEnd = targetClosing;
-    // O início do ciclo é o dia seguinte ao fechamento anterior (Fechamento Atual - 1 Mês + 1 Dia)
-    const prevClosing = subMonths(set(targetClosing, { hours: 0, minutes: 0, seconds: 0, milliseconds: 0 }), 1);
-    const cycleStart = addDays(prevClosing, 1);
-
-    return { start: cycleStart, end: cycleEnd };
-  }, []);
-
-  // Somente parcelas de compras que NÃO estão marcadas como pagas
+  // 1. Somente parcelas de compras que NÃO estão marcadas como pagas e filtrando Invoices pagos
   const pendingInstallments = useMemo(() => {
     if (!installments || !state.purchases) return [];
     return installments.filter(inst => {
       const purchase = state.purchases.find(p => p.id === inst.purchaseId);
-      return purchase?.status !== 'paid';
+      if (purchase?.status === 'paid') return false;
+      if (inst.value <= 0) return false;
+      
+      const card = state.cards.find(c => c.id === inst.cardId);
+      if (!card) return false;
+
+      // Descobrir a qual "fatura/mês" essa parcela cai baseado no closing day
+      let targetInvoiceDate = new Date(inst.date);
+      if (targetInvoiceDate.getDate() >= card.closingDay) {
+        targetInvoiceDate = addMonths(targetInvoiceDate, 1);
+      }
+      const invMonth = targetInvoiceDate.getMonth() + 1; // 1-12
+      const invYear = targetInvoiceDate.getFullYear();
+
+      // Verifica se a invoice dessa data já está paga/fechada no banco
+      const isPaid = state.invoices?.some(i => 
+        i.cardId === inst.cardId && 
+        i.month === invMonth && 
+        i.year === invYear &&
+        (i.status === 'PAID' || i.status === 'OVERPAID')
+      );
+      
+      return !isPaid;
     });
-  }, [installments, state.purchases]);
+  }, [installments, state.purchases, state.cards, state.invoices]);
 
+  // Total de Saldo Positivo Global
+  const totalPositiveBalance = useMemo(() => {
+    return state.cards.reduce((sum, c) => sum + (c.balance && c.balance > 0 ? c.balance : 0), 0);
+  }, [state.cards]);
+
+  // 2. Dívida Total: Soma de TODAS as parcelas pendentes MENOS os saldos positivos
   const totalDebt = useMemo(() => {
-    return pendingInstallments.reduce((sum, inst) => sum + inst.value, 0);
-  }, [pendingInstallments]);
+    const rawDebt = pendingInstallments.reduce((sum, inst) => sum + inst.value, 0);
+    return Math.max(0, rawDebt - totalPositiveBalance);
+  }, [pendingInstallments, totalPositiveBalance]);
 
-  // Estatísticas Globais de Limite
+  // 3. Limite Disponível Global
   const globalLimitStats = useMemo(() => {
     const totalLimit = state.cards.reduce((sum, card) => sum + (card.limit || 0), 0);
+    const available = Math.max(0, totalLimit - totalDebt);
     return {
       total: totalLimit,
-      available: Math.max(0, totalLimit - totalDebt),
+      available,
       usagePercent: totalLimit > 0 ? (totalDebt / totalLimit) * 100 : 0
     };
   }, [state.cards, totalDebt]);
 
-  // Valor total das PRÓXIMAS faturas somadas (Global)
-  const totalNextInvoicesValue = useMemo(() => {
-    return state.cards.reduce((sum, card) => {
-      const cycle = getCardCycle(card);
-      if (!cycle) return sum;
-      
-      const cardInvoice = pendingInstallments
-        .filter(inst => inst.cardId === card.id && isWithinInterval(new Date(inst.date), { start: cycle.start, end: cycle.end }))
-        .reduce((s, i) => s + i.value, 0);
-      return sum + cardInvoice;
-    }, 0);
-  }, [state.cards, pendingInstallments, getCardCycle]);
+  // 4. Parcelas do Mês Selecionado baseadas no Ciclo e Vencimento
+  const currentMonthInstallments = useMemo(() => {
+    return pendingInstallments.filter(inst => {
+      // Como a parcela (Installment) já contém month e year corretos definidos
+      // pela função `generateInstallments` baseada no closingDay, basta comparar:
+      return inst.month === selectedMonth.getMonth() && inst.year === selectedMonth.getFullYear();
+    });
+  }, [pendingInstallments, selectedMonth]);
 
-  // Alertas de Vencimento nos próximos 6 dias
+  // Fatura Atual Global (apenas do mês selecionado) reduzindo o saldo positivo se sobrar
+  const currentInvoiceGlobal = useMemo(() => {
+    const rawSum = currentMonthInstallments.reduce((sum, inst) => sum + inst.value, 0);
+    // Para simplificar a view global, apenas mostramos a soma
+    return Math.max(0, rawSum);
+  }, [currentMonthInstallments]);
+
+  // 5. Consolidado por Cartão
+  const cardData = useMemo(() => {
+    if (!state.cards) return [];
+    
+    return state.cards.map(card => {
+      // Valor da fatura NO MÊS SELECIONADO para este cartão
+      const baseInvoice = currentMonthInstallments
+        .filter(inst => inst.cardId === card.id)
+        .reduce((sum, inst) => sum + inst.value, 0);
+
+      // Aplica o Saldo do Cartão (balance)
+      const balance = card.balance || 0;
+      let currentInvoice = baseInvoice;
+
+      if (balance > 0) {
+        currentInvoice = Math.max(0, baseInvoice - balance);
+      } else if (balance < 0) {
+        // Se tem divida pendente, ela soma na fatura do mês atual se ela for exibida. 
+        // Para simplificar, sempre somamos a dívida anterior (negativa no balance).
+        currentInvoice = baseInvoice + Math.abs(balance);
+      }
+
+      // Total já comprometido (todas as parcelas futuras) deste cartão
+      const totalUsedOnCard = pendingInstallments
+        .filter(inst => inst.cardId === card.id)
+        .reduce((sum, inst) => sum + inst.value, 0);
+
+      const limit = card.limit || 0;
+      const usage = limit > 0 ? (totalUsedOnCard / limit) * 100 : 0;
+      const available = Math.max(0, limit - totalUsedOnCard + (balance > 0 ? balance : 0));
+
+      const cycle = getCardCycleForMonth(card, selectedMonth);
+      
+      return {
+        id: card.id,
+        name: card.name,
+        color: card.color || '#64748b',
+        fullLimit: limit,
+        value: totalUsedOnCard,
+        currentInvoice,
+        usage,
+        available,
+        cycle
+      };
+    }).filter(c => c.currentInvoice > 0); // BUG FIX: Não exibir cartão sem fatura aberta no mês
+  }, [state.cards, pendingInstallments, currentMonthInstallments, selectedMonth]);
+
+  // Alertas de Vencimento (mantido como proximidade de 6 dias, mas usando o total devido do cartão no ciclo/mês atual)
   const dueSoonCards = useMemo(() => {
     return state.cards.map(card => {
       let dueDate = set(new Date(), { date: card.dueDay, hours: 0, minutes: 0, seconds: 0 });
@@ -117,90 +196,51 @@ export function Dashboard({ state, installments = [], onAddPurchase }: Dashboard
       const isDueSoon = isWithinInterval(dueDate, { start: today, end: next6Days });
       
       if (isDueSoon) {
-        const cycle = getCardCycle(card);
-        if (!cycle) return null;
-        
+        // Verifica quanto falta pagar da fatura do mês atual do alerta
         const value = pendingInstallments
-          .filter(inst => inst.cardId === card.id && isWithinInterval(new Date(inst.date), { start: cycle.start, end: cycle.end }))
+          .filter(inst => inst.cardId === card.id && isSameMonth(new Date(inst.date), dueDate))
           .reduce((s, i) => s + i.value, 0);
         
         return value > 0 ? { ...card, dueDate, totalValue: value } : null;
       }
       return null;
     }).filter(Boolean) as (Card & { dueDate: Date, totalValue: number })[];
-  }, [state.cards, pendingInstallments, today, next6Days, getCardCycle]);
+  }, [state.cards, pendingInstallments, today, next6Days]);
 
-  // Chart data: Evolução baseada em meses calendários reais
+  // Chart data: 6 meses a partir do selecionado
   const chartData = useMemo(() => {
-    try {
-      const data = [];
-      const insts = pendingInstallments || [];
-      for (let i = 0; i < 6; i++) {
-          const targetMonthDate = addMonths(currentMonth, i);
-          const total = insts
-              .filter(inst => inst && isSameMonth(new Date(inst.date), targetMonthDate))
-              .reduce((sum, inst) => sum + (inst.value || 0), 0);
-              
-          data.push({
-              name: format(targetMonthDate, 'MMM', { locale: ptBR }),
-              valor: total,
-          });
-      }
-      return data;
-    } catch (e) {
-      console.error("Erro no chartData:", e);
-      return [];
+    const data = [];
+    for (let i = 0; i < 6; i++) {
+        const targetMonthDate = addMonths(selectedMonth, i);
+        const total = pendingInstallments
+            .filter(inst => isSameMonth(new Date(inst.date), targetMonthDate))
+            .reduce((sum, inst) => sum + inst.value, 0);
+            
+        data.push({
+            name: format(targetMonthDate, 'MMM', { locale: ptBR }),
+            valor: total,
+        });
     }
-  }, [pendingInstallments, currentMonth]);
-
-  // Consolidado de uso por cartão
-  const cardData = useMemo(() => {
-    try {
-      if (!state.cards) return [];
-      const pins = pendingInstallments || [];
-      
-      return state.cards.map(card => {
-          if (!card) return null;
-          const cycle = getCardCycle(card);
-          if (!cycle) return null;
-          
-          const nextInvoiceValue = pins
-              .filter(inst => 
-                inst && 
-                inst.cardId === card.id && 
-                isWithinInterval(new Date(inst.date), { start: cycle.start, end: cycle.end })
-              )
-              .reduce((sum, inst) => sum + (inst.value || 0), 0);
-
-          const totalUsedOnCard = pins
-              .filter(inst => inst && inst.cardId === card.id)
-              .reduce((sum, inst) => sum + (inst.value || 0), 0);
-
-          return {
-              id: card.id,
-              name: card.name,
-              value: totalUsedOnCard,
-              usage: (card.limit && card.limit > 0) ? (totalUsedOnCard / card.limit) * 100 : 0,
-              color: card.color || '#64748b',
-              fullLimit: card.limit || 0,
-              currentInvoice: nextInvoiceValue,
-              cycle,
-              available: Math.max(0, (card.limit || 0) - totalUsedOnCard)
-          };
-      }).filter(Boolean) as any[];
-    } catch (e) {
-      console.error("Erro no cardData:", e);
-      return [];
-    }
-  }, [state.cards, pendingInstallments, getCardCycle]);
+    return data;
+  }, [pendingInstallments, selectedMonth]);
 
   return (
     <div className="space-y-8">
       {/* Welcome Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Olá, Investidor</h2>
-          <p className="text-slate-500">Seu resumo financeiro está atualizado.</p>
+          <h2 className="text-2xl font-bold text-slate-800">Resumo Financeiro</h2>
+          <div className="flex items-center gap-4 mt-2">
+            <button onClick={handlePrevMonth} className="p-1 rounded-full hover:bg-slate-200 text-slate-500 transition-colors">
+              <ChevronLeft size={20} />
+            </button>
+            <span className="font-bold text-violet-600 text-lg min-w-[120px] text-center capitalize">
+              {format(selectedMonth, 'MMMM yyyy', { locale: ptBR })}
+            </span>
+            <button onClick={handleNextMonth} className="p-1 rounded-full hover:bg-slate-200 text-slate-500 transition-colors">
+              <ChevronRight size={20} />
+            </button>
+          </div>
         </div>
         <div className="flex items-center gap-3">
            <div className="bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm flex items-center gap-3 text-sm">
@@ -233,8 +273,8 @@ export function Dashboard({ state, installments = [], onAddPurchase }: Dashboard
         />
         <StatCard 
           label="Fatura Atual" 
-          value={formatCurrency(totalNextInvoicesValue)} 
-          subLabel="Ciclo em aberto"
+          value={formatCurrency(currentInvoiceGlobal)} 
+          subLabel={`Em ${format(selectedMonth, 'MMM', { locale: ptBR })}`}
           icon={CreditCard}
           color="blue"
         />
@@ -308,15 +348,9 @@ export function Dashboard({ state, installments = [], onAddPurchase }: Dashboard
            </div>
            <div className="space-y-4">
               {(() => {
-                const highlights = pendingInstallments.filter(inst => {
-                  const card = state.cards.find(c => c.id === inst.cardId);
-                  if (!card) return false;
-                  const cycle = getCardCycle(card);
-                  if (!cycle) return false;
-                  return isWithinInterval(new Date(inst.date), { start: cycle.start, end: cycle.end });
-                }).slice(0, 5);
+                const highlights = currentMonthInstallments.slice(0, 5);
 
-                if (highlights.length === 0) return <p className="text-slate-400 text-sm text-center py-8">Nenhum lançamento no ciclo atual.</p>;
+                if (highlights.length === 0) return <p className="text-slate-400 text-sm text-center py-8">Nenhum lançamento para {format(selectedMonth, 'MMM/yyyy')}.</p>;
 
                 return highlights.map((inst, idx) => (
                   <div key={idx} className="flex items-center justify-between p-3 rounded-xl hover:bg-slate-50 transition-colors">
@@ -403,7 +437,7 @@ export function Dashboard({ state, installments = [], onAddPurchase }: Dashboard
                   <p className="text-sm font-black text-slate-800">{formatCurrency(card.currentInvoice)}</p>
                 </div>
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-1.5 mt-2">
                 <div className="flex justify-between text-[10px] font-bold">
                   <span className="text-slate-400">DISPONÍVEL</span>
                   <span className="text-emerald-600">{formatCurrency(card.available)}</span>
@@ -412,10 +446,132 @@ export function Dashboard({ state, installments = [], onAddPurchase }: Dashboard
                   <motion.div initial={{ width: 0 }} animate={{ width: `${Math.min(card.usage, 100)}%` }} className="h-full rounded-full" style={{ backgroundColor: card.color }} />
                 </div>
               </div>
+              
+              <div className="mt-4 pt-4 border-t border-slate-100 space-y-3" onClick={(e) => e.stopPropagation()}>
+                <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
+                  <p className="text-[10px] uppercase font-black text-slate-400 mb-1">Sugestão de Pagamento</p>
+                  {(() => {
+                    const invoice = card.currentInvoice;
+                    const limit = card.fullLimit || 1;
+                    const usageGlobal = card.usage;
+                    let suggestText = "Ideal: 100%";
+                    let suggestValue = invoice;
+
+                    if (usageGlobal > 80) {
+                      suggestText = "Estratégico: 70%";
+                      suggestValue = invoice * 0.7;
+                    }
+
+                    return (
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs font-bold text-slate-700">{suggestText}</span>
+                        <span className="text-sm font-black text-indigo-600">{formatCurrency(suggestValue)}</span>
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {(() => {
+                  let dueDate = new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), card.cycle.due.getDate());
+                  if (card.cycle.due.getMonth() !== selectedMonth.getMonth()) {
+                     dueDate = addMonths(dueDate, 1);
+                  }
+                  
+                  // Aparece 5 dias antes e continua aparecendo enquanto estiver atrasada
+                  const daysToDue = Math.ceil((dueDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
+                  const isDueSoon = daysToDue <= 5; // Aparece sempre que faltar 5 dias ou menos (mesmo atrasado)
+
+                  if (isDueSoon && card.currentInvoice > 0) {
+                    return (
+                      <button 
+                        onClick={() => {
+                          const invMonth = selectedMonth.getMonth() + 1;
+                          const invYear = selectedMonth.getFullYear();
+                          setPaymentModalCard({ card: state.cards.find(c => c.id === card.id)!, invoiceValue: card.currentInvoice, month: invMonth, year: invYear });
+                          setPaymentAmount(card.currentInvoice.toString());
+                        }}
+                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl transition-colors shadow-sm flex items-center justify-center gap-2"
+                      >
+                        <CheckCircle size={16} /> Realizar Pagamento
+                      </button>
+                    );
+                  }
+                  return null;
+                })()}
+              </div>
             </div>
           ))}
         </div>
       </div>
+
+      {/* Modal de Pagamento */}
+      <AnimatePresence>
+        {paymentModalCard && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setPaymentModalCard(null)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col">
+              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg" style={{ backgroundColor: paymentModalCard.card.color }}>
+                    <Wallet size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-800">Pagamento</h3>
+                    <p className="text-sm text-slate-500 font-medium">{paymentModalCard.card.name}</p>
+                  </div>
+                </div>
+                <button onClick={() => setPaymentModalCard(null)} className="p-2 hover:bg-white rounded-full transition-colors text-slate-400 shadow-sm">
+                  <AlertCircle className="rotate-45" size={24} />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-6">
+                <div className="text-center p-6 bg-slate-50 rounded-2xl border border-slate-100">
+                   <p className="text-sm text-slate-500 font-medium mb-1">Valor Total da Fatura</p>
+                   <p className="text-3xl font-black text-slate-800">{formatCurrency(paymentModalCard.invoiceValue)}</p>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-2">Valor Pago</label>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-medium">R$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={paymentAmount}
+                      onChange={(e) => setPaymentAmount(e.target.value)}
+                      className="w-full pl-12 pr-4 py-3 bg-white border-2 border-slate-100 rounded-xl focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all text-slate-700 font-bold"
+                      placeholder="0,00"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-500 mt-2">
+                    Pagamento menor gera dívida. Pagamento maior gera crédito na próxima fatura.
+                  </p>
+                </div>
+
+                <button 
+                  onClick={async () => {
+                    const paid = parseFloat(paymentAmount.replace(',', '.'));
+                    if (isNaN(paid) || paid <= 0) return alert('Insira um valor válido');
+                    
+                    await payInvoice(
+                      paymentModalCard.card.id,
+                      paymentModalCard.month,
+                      paymentModalCard.year,
+                      paymentModalCard.invoiceValue,
+                      paid
+                    );
+                    setPaymentModalCard(null);
+                  }}
+                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-[0.98]"
+                >
+                  Confirmar Pagamento
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Modal de Detalhes do Cartão */}
       <AnimatePresence>
@@ -440,25 +596,13 @@ export function Dashboard({ state, installments = [], onAddPurchase }: Dashboard
 
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {(() => {
-                  const cardInfo = cardData.find(c => c.id === selectedCardForDetail.id);
-                  if (!cardInfo || !cardInfo.cycle) return <p className="text-center text-slate-400">Ciclo não encontrado.</p>;
-
-                  const filtered = pendingInstallments.filter(inst => 
-                    inst.cardId === selectedCardForDetail.id && 
-                    isWithinInterval(new Date(inst.date), { start: cardInfo.cycle.start, end: cardInfo.cycle.end })
-                  );
+                  const filtered = currentMonthInstallments.filter(inst => inst.cardId === selectedCardForDetail.id);
 
                   return (
                     <>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Início do Ciclo</p>
-                          <p className="text-sm font-bold text-slate-700">{format(cardInfo.cycle.start, 'dd/MM/yyyy')}</p>
-                        </div>
-                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center">
-                          <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Fechamento</p>
-                          <p className="text-sm font-bold text-slate-700">{format(cardInfo.cycle.end, 'dd/MM/yyyy')}</p>
-                        </div>
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-center">
+                        <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Mês Selecionado</p>
+                        <p className="text-sm font-bold text-slate-700 capitalize">{format(selectedMonth, 'MMMM yyyy', { locale: ptBR })}</p>
                       </div>
 
                       <div className="space-y-3">
