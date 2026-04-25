@@ -4,12 +4,12 @@ import { generateInstallments } from '../utils/finance';
 import { supabase } from '../lib/supabase';
 
 const DEFAULT_CATEGORIES: Category[] = [
-  { id: '1', name: 'Alimentação', color: '#ef4444' },
-  { id: '2', name: 'Transporte', color: '#3b82f6' },
-  { id: '3', name: 'Lazer', color: '#f59e0b' },
-  { id: '4', name: 'Saúde', color: '#10b981' },
-  { id: '5', name: 'Shopping', color: '#8b5cf6' },
-  { id: '6', name: 'Outros', color: '#64748b' },
+  { id: '00000000-0000-0000-0000-000000000001', name: 'Alimentação', color: '#ef4444' },
+  { id: '00000000-0000-0000-0000-000000000002', name: 'Transporte', color: '#3b82f6' },
+  { id: '00000000-0000-0000-0000-000000000003', name: 'Lazer', color: '#f59e0b' },
+  { id: '00000000-0000-0000-0000-000000000004', name: 'Saúde', color: '#10b981' },
+  { id: '00000000-0000-0000-0000-000000000005', name: 'Shopping', color: '#8b5cf6' },
+  { id: '00000000-0000-0000-0000-000000000006', name: 'Outros', color: '#64748b' },
 ];
 
 export function useFinancialData() {
@@ -124,77 +124,134 @@ export function useFinancialData() {
   }, []);
 
   const addCard = useCallback(async (card: Omit<Card, 'id'>) => {
-    const { data, error } = await supabase.from('cards').insert([{
-      name: card.name,
-      limit: card.limit,
-      closing_day: card.closingDay,
-      due_day: card.dueDay,
-      bank: card.bank,
-      brand: card.brand,
-      color: card.color
-    }]).select().single();
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      const { data, error } = await supabase.from('cards').insert([{
+        name: card.name,
+        limit: card.limit,
+        closing_day: card.closingDay,
+        due_day: card.dueDay,
+        bank: card.bank,
+        brand: card.brand,
+        color: card.color,
+        user_id: user?.id
+      }]).select();
 
-    if (data && !error) {
-      const newCard: Card = {
-        id: data.id,
-        name: data.name,
-        limit: data.limit,
-        closingDay: data.closing_day,
-        dueDay: data.due_day,
-        bank: data.bank,
-        brand: data.brand,
-        color: data.color
-      };
-      setState(prev => ({ ...prev, cards: [...prev.cards, newCard] }));
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const returnedCard = data[0];
+        const newCard: Card = {
+          id: returnedCard.id,
+          name: returnedCard.name,
+          limit: returnedCard.limit,
+          closingDay: returnedCard.closing_day,
+          dueDay: returnedCard.due_day,
+          bank: returnedCard.bank,
+          brand: returnedCard.brand,
+          color: returnedCard.color
+        };
+        setState(prev => ({ ...prev, cards: [...prev.cards, newCard] }));
+        addNotification({
+          title: 'Novo Cartão',
+          message: `Cartão ${card.name} foi adicionado com sucesso.`,
+          type: 'card'
+        });
+      }
+    } catch (error: any) {
+       console.error('Error adding card:', error);
+       alert('Erro ao salvar o cartão: ' + (error.message || 'Erro desconhecido'));
+    }
+  }, [addNotification]);
+
+  const updateCard = useCallback(async (id: string, updates: Partial<Omit<Card, 'id'>>) => {
+    try {
+      const dbUpdates: any = {};
+      if (updates.name !== undefined) dbUpdates.name = updates.name;
+      if (updates.limit !== undefined) dbUpdates.limit = updates.limit;
+      if (updates.closingDay !== undefined) dbUpdates.closing_day = updates.closingDay;
+      if (updates.dueDay !== undefined) dbUpdates.due_day = updates.dueDay;
+      if (updates.bank !== undefined) dbUpdates.bank = updates.bank;
+      if (updates.brand !== undefined) dbUpdates.brand = updates.brand;
+      if (updates.color !== undefined) dbUpdates.color = updates.color;
+
+      const { error } = await supabase.from('cards').update(dbUpdates).eq('id', id);
+      if (error) throw error;
+
+      setState(prev => ({
+        ...prev,
+        cards: prev.cards.map(c => c.id === id ? { ...c, ...updates } : c)
+      }));
+
       addNotification({
-        title: 'Novo Cartão',
-        message: `Cartão ${card.name} foi adicionado com sucesso.`,
+        title: 'Cartão Atualizado',
+        message: `As alterações no cartão foram salvas.`,
         type: 'card'
       });
-    } else if (error) {
-       console.error('Error adding card:', error);
+    } catch (error: any) {
+      console.error('Error updating card:', error);
+      alert('Erro ao atualizar o cartão: ' + (error.message || 'Erro desconhecido'));
     }
   }, [addNotification]);
 
   const addPurchase = useCallback(async (purchase: Omit<Purchase, 'id'>) => {
-    const { data, error } = await supabase.from('purchases').insert([{
-      name: purchase.name,
-      total_value: purchase.totalValue,
-      installments: purchase.installments,
-      card_id: purchase.cardId,
-      category_id: purchase.categoryId,
-      date: purchase.date
-    }]).select().single();
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
 
-    if (data && !error) {
-      const newPurchase: Purchase = {
-        id: data.id,
-        name: data.name,
-        totalValue: data.total_value,
-        installments: data.installments,
-        cardId: data.card_id,
-        date: data.date,
-        categoryId: data.category_id
-      };
-      setState(prev => ({ ...prev, purchases: [...prev.purchases, newPurchase] }));
-      addNotification({
-        title: 'Nova Compra',
-        message: `${purchase.name} - ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(purchase.totalValue)}`,
-        type: 'purchase'
-      });
-    } else if (error) {
+      const { data, error } = await supabase.from('purchases').insert([{
+        name: purchase.name,
+        total_value: purchase.totalValue,
+        installments: purchase.installments,
+        card_id: purchase.cardId,
+        category_id: purchase.categoryId,
+        date: purchase.date,
+        user_id: user?.id
+      }]).select();
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const returnedPurchase = data[0];
+        const newPurchase: Purchase = {
+          id: returnedPurchase.id,
+          name: returnedPurchase.name,
+          totalValue: returnedPurchase.total_value,
+          installments: returnedPurchase.installments,
+          cardId: returnedPurchase.card_id,
+          date: returnedPurchase.date,
+          categoryId: returnedPurchase.category_id
+        };
+        setState(prev => ({ ...prev, purchases: [...prev.purchases, newPurchase] }));
+        addNotification({
+          title: 'Nova Compra',
+          message: `${purchase.name} - ${new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(purchase.totalValue)}`,
+          type: 'purchase'
+        });
+      }
+    } catch (error: any) {
       console.error('Error adding purchase:', error);
+      alert('Erro ao salvar a compra: ' + (error.message || 'Erro desconhecido'));
     }
   }, [addNotification]);
 
   const addCategory = useCallback(async (category: Omit<Category, 'id'>) => {
-    const { data, error } = await supabase.from('categories').insert([{
-      name: category.name,
-      color: category.color
-    }]).select().single();
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
 
-    if (data && !error) {
-      setState(prev => ({ ...prev, categories: [...prev.categories, data] }));
+      const { data, error } = await supabase.from('categories').insert([{
+        name: category.name,
+        color: category.color,
+        user_id: user?.id
+      }]).select();
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        setState(prev => ({ ...prev, categories: [...prev.categories, data[0]] }));
+      }
+    } catch (error: any) {
+      console.error('Error adding category:', error);
     }
   }, []);
 
@@ -294,6 +351,7 @@ export function useFinancialData() {
     state,
     loading,
     addCard,
+    updateCard,
     addPurchase,
     addCategory,
     updateCategory,

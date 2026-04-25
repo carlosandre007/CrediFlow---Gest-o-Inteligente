@@ -28,7 +28,7 @@ import {
 } from 'recharts';
 import { FinancialState, Installment, Card } from '../types';
 import { formatCurrency, cn } from '../lib/utils';
-import { startOfMonth, subMonths, format, addMonths } from 'date-fns';
+import { startOfMonth, subMonths, format, addMonths, isWithinInterval, addDays, set } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { motion } from 'motion/react';
 
@@ -39,11 +39,14 @@ interface DashboardProps {
 }
 
 export function Dashboard({ state, installments, onAddPurchase }: DashboardProps) {
+  const currentMonth = new Date();
+  const today = new Date();
+  const next6Days = addDays(today, 6);
+
   const totalDebt = useMemo(() => {
     return installments.reduce((sum, inst) => sum + inst.value, 0);
   }, [installments]);
 
-  const currentMonth = new Date();
   const currentMonthValue = useMemo(() => {
     return installments
       .filter(inst => inst.month === currentMonth.getMonth() && inst.year === currentMonth.getFullYear())
@@ -56,6 +59,43 @@ export function Dashboard({ state, installments, onAddPurchase }: DashboardProps
       .filter(inst => inst.month === next.getMonth() && inst.year === next.getFullYear())
       .reduce((sum, inst) => sum + inst.value, 0);
   }, [installments, currentMonth]);
+
+  // Global Limit Calculation
+  const globalLimitStats = useMemo(() => {
+    const totalLimit = state.cards.reduce((sum, card) => sum + card.limit, 0);
+    const totalUsedCurrent = installments
+      .filter(inst => inst.month === currentMonth.getMonth() && inst.year === currentMonth.getFullYear())
+      .reduce((sum, inst) => sum + inst.value, 0);
+    
+    return {
+      total: totalLimit,
+      available: totalLimit - totalUsedCurrent,
+      usagePercent: totalLimit > 0 ? (totalUsedCurrent / totalLimit) * 100 : 0
+    };
+  }, [state.cards, installments, currentMonth]);
+
+  // Due Soon Invoices (next 6 days)
+  const dueSoonCards = useMemo(() => {
+    return state.cards.map(card => {
+      let dueDate = set(new Date(), { date: card.dueDay, hours: 0, minutes: 0, seconds: 0 });
+      
+      // If due day has passed this month, check next month
+      if (dueDate < today && card.dueDay < today.getDate()) {
+        dueDate = addMonths(dueDate, 1);
+      }
+
+      const isDueSoon = isWithinInterval(dueDate, { start: today, end: next6Days });
+      
+      if (isDueSoon) {
+        const value = installments
+          .filter(inst => inst.cardId === card.id && inst.month === dueDate.getMonth() && inst.year === dueDate.getFullYear())
+          .reduce((sum, inst) => sum + inst.value, 0);
+        
+        return { ...card, dueDate, totalValue: value };
+      }
+      return null;
+    }).filter(c => c !== null && c.totalValue > 0) as (Card & { dueDate: Date, totalValue: number })[];
+  }, [state.cards, installments, today, next6Days]);
 
   // Chart data: Monthly debt evolution
   const chartData = useMemo(() => {
@@ -81,9 +121,8 @@ export function Dashboard({ state, installments, onAddPurchase }: DashboardProps
     return state.cards.map(card => {
         const used = installments
             .filter(inst => inst.cardId === card.id)
-            .reduce((sum, inst) => sum + inst.value, 0); // This is total debt on this card, maybe we want current invoice?
+            .reduce((sum, inst) => sum + inst.value, 0);
         
-        // Let's use current month invoice for "limit usage" representation
         const currentInvoice = installments
             .filter(inst => inst.cardId === card.id && inst.month === currentMonth.getMonth() && inst.year === currentMonth.getFullYear())
             .reduce((sum, inst) => sum + inst.value, 0);
@@ -130,25 +169,25 @@ export function Dashboard({ state, installments, onAddPurchase }: DashboardProps
           color="violet"
         />
         <StatCard 
+          label="Limite Disponível" 
+          value={formatCurrency(globalLimitStats.available)} 
+          subLabel={`De ${formatCurrency(globalLimitStats.total)} total`}
+          icon={PiggyBank}
+          color="emerald"
+        />
+        <StatCard 
           label="Fatura Atual" 
           value={formatCurrency(currentMonthValue)} 
           subLabel="Vencendo este mês"
           icon={Calendar}
           color="blue"
         />
-        <StatCard 
-          label="Próxima Fatura" 
-          value={formatCurrency(nextMonthValue)} 
-          subLabel="Previsão próximo mês"
-          icon={ArrowUpRight}
-          color="indigo"
-        />
         <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between group hover:border-violet-200 transition-colors cursor-pointer" onClick={onAddPurchase}>
           <div className="flex items-center justify-between mb-4">
             <div className="w-10 h-10 rounded-xl bg-violet-100 text-violet-600 flex items-center justify-center group-hover:scale-110 transition-transform">
               <Zap size={20} />
             </div>
-            <Zap className="text-slate-200" size={24} />
+            <ArrowUpRight className="text-slate-200" size={24} />
           </div>
           <div>
             <h3 className="text-sm font-medium text-slate-500">Atalho Rápido</h3>
@@ -297,13 +336,42 @@ export function Dashboard({ state, installments, onAddPurchase }: DashboardProps
          </div>
 
          <div className="space-y-6">
+            {dueSoonCards.length > 0 && (
+              <div className="bg-rose-50 border border-rose-100 p-6 rounded-2xl">
+                 <div className="flex items-start gap-4">
+                    <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                      <AlertCircle size={20} />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-bold text-rose-900 mb-3">Vencendo nos próximos 6 dias</h4>
+                      <div className="space-y-3">
+                        {dueSoonCards.map(card => (
+                          <div key={card.id} className="flex items-center justify-between bg-white/50 p-3 rounded-xl border border-rose-200/50">
+                            <div className="flex items-center gap-3">
+                              <div className="w-2 h-8 rounded-full" style={{ backgroundColor: card.color }}></div>
+                              <div>
+                                <p className="text-sm font-bold text-slate-800">{card.name}</p>
+                                <p className="text-[10px] text-rose-600 font-medium">Vence dia {format(card.dueDate, 'dd/MM')}</p>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm font-black text-rose-600">{formatCurrency(card.totalValue)}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                 </div>
+              </div>
+            )}
+
             <div className="bg-gradient-to-br from-indigo-600 to-violet-700 p-6 rounded-2xl shadow-lg relative overflow-hidden text-white">
                <div className="relative z-10">
                  <div className="flex items-center gap-2 mb-4">
                     <PiggyBank size={20} className="text-violet-200" />
                     <span className="text-sm font-medium text-violet-100">Meta de Quitação</span>
                  </div>
-                 <h3 className="text-2xl font-bold mb-1">R$ 450,00 <span className="text-xs font-normal opacity-70">p/ dia</span></h3>
+                 <h3 className="text-2xl font-bold mb-1">{formatCurrency(totalDebt / 60)} <span className="text-xs font-normal opacity-70">p/ dia</span></h3>
                  <p className="text-sm text-violet-200 mb-6">Para zerar suas dívidas em 60 dias.</p>
                  <button className="bg-white text-violet-700 px-6 py-2.5 rounded-xl text-sm font-bold shadow-md hover:bg-violet-50 transition-colors">
                     Simular Cenários
@@ -312,20 +380,6 @@ export function Dashboard({ state, installments, onAddPurchase }: DashboardProps
                {/* Aesthetic circles */}
                <div className="absolute -right-12 -bottom-12 w-48 h-48 rounded-full bg-white opacity-10"></div>
                <div className="absolute right-8 top-8 w-16 h-16 rounded-full bg-white opacity-5"></div>
-            </div>
-
-            <div className="bg-amber-50 border border-amber-100 p-6 rounded-2xl">
-               <div className="flex items-start gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
-                    <AlertCircle size={20} />
-                  </div>
-                  <div>
-                    <h4 className="font-bold text-amber-900 mb-1">Alerta de Risco</h4>
-                    <p className="text-sm text-amber-800 opacity-80 leading-relaxed">
-                      Sua fatura do cartão <span className="font-bold text-amber-900">Nubank</span> ultrapassou 30% da sua renda média. Recomendamos evitar gastos supérfluos.
-                    </p>
-                  </div>
-               </div>
             </div>
          </div>
       </div>
@@ -338,6 +392,7 @@ function StatCard({ label, value, subLabel, icon: Icon, color }: { label: string
     violet: "bg-violet-50 text-violet-600",
     blue: "bg-blue-50 text-blue-600",
     indigo: "bg-indigo-50 text-indigo-600",
+    emerald: "bg-emerald-50 text-emerald-600",
   };
 
   return (

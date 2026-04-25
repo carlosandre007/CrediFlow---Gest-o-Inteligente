@@ -1,8 +1,8 @@
-import React, { useMemo } from 'react';
-import { ShoppingBag, Trash2, Calendar, CreditCard, Tag } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { ShoppingBag, Trash2, Calendar, CreditCard, Tag, XCircle } from 'lucide-react';
 import { Purchase, Card, Category } from '../types';
 import { formatCurrency, formatDate, cn } from '../lib/utils';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 
 interface PurchasesListProps {
   purchases: Purchase[];
@@ -12,9 +12,15 @@ interface PurchasesListProps {
 }
 
 export function PurchasesList({ purchases, cards, categories, onDeletePurchase }: PurchasesListProps) {
-  const sortedPurchases = useMemo(() => {
-    return [...purchases].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  }, [purchases]);
+  const [filterCategoryId, setFilterCategoryId] = useState<string | null>(null);
+
+  const filteredPurchases = useMemo(() => {
+    let result = [...purchases];
+    if (filterCategoryId) {
+      result = result.filter(p => p.categoryId === filterCategoryId);
+    }
+    return result.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [purchases, filterCategoryId]);
 
   const getCardName = (cardId: string) => {
     return cards.find(c => c.id === cardId)?.name || 'Cartão desconhecido';
@@ -28,6 +34,11 @@ export function PurchasesList({ purchases, cards, categories, onDeletePurchase }
     return categories.find(c => c.id === categoryId) || { name: 'Sem Categoria', color: '#64748b' };
   };
 
+  const activeFilterName = useMemo(() => {
+    if (!filterCategoryId) return null;
+    return categories.find(c => c.id === filterCategoryId)?.name;
+  }, [filterCategoryId, categories]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -35,6 +46,21 @@ export function PurchasesList({ purchases, cards, categories, onDeletePurchase }
           <h2 className="text-2xl font-bold text-slate-800">Lançamentos</h2>
           <p className="text-slate-500">Histórico completo de compras e parcelamentos.</p>
         </div>
+        <AnimatePresence>
+          {filterCategoryId && (
+            <motion.button 
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 20 }}
+              onClick={() => setFilterCategoryId(null)}
+              className="flex items-center gap-2 px-4 py-2 bg-violet-50 text-violet-600 rounded-xl text-xs font-bold hover:bg-violet-100 transition-all border border-violet-100"
+            >
+              <span>Filtro: {activeFilterName}</span>
+              <XCircle size={14} />
+              <span className="ml-1 border-l border-violet-200 pl-2">Limpar</span>
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
 
       <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
@@ -51,14 +77,14 @@ export function PurchasesList({ purchases, cards, categories, onDeletePurchase }
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {sortedPurchases.length === 0 ? (
+              {filteredPurchases.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-slate-400 text-sm">
-                    Nenhum lançamento encontrado.
+                    {filterCategoryId ? 'Nenhum lançamento nesta categoria.' : 'Nenhum lançamento encontrado.'}
                   </td>
                 </tr>
               ) : (
-                sortedPurchases.map((purchase) => (
+                filteredPurchases.map((purchase) => (
                   <motion.tr 
                     layout
                     key={purchase.id} 
@@ -72,17 +98,22 @@ export function PurchasesList({ purchases, cards, categories, onDeletePurchase }
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
-                        <div 
-                          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-white"
+                        <button 
+                          onClick={() => setFilterCategoryId(purchase.categoryId)}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-white hover:scale-110 transition-transform shadow-sm"
                           style={{ backgroundColor: getCategory(purchase.categoryId).color }}
+                          title={`Filtrar por ${getCategory(purchase.categoryId).name}`}
                         >
                           <ShoppingBag size={14} />
-                        </div>
+                        </button>
                         <div>
                           <p className="text-sm font-bold text-slate-800">{purchase.name}</p>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">
+                          <button 
+                            onClick={() => setFilterCategoryId(purchase.categoryId)}
+                            className="text-[10px] text-slate-400 font-bold uppercase tracking-tighter hover:text-violet-600 transition-colors"
+                          >
                             {getCategory(purchase.categoryId).name}
-                          </p>
+                          </button>
                         </div>
                       </div>
                     </td>

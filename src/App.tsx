@@ -32,19 +32,99 @@ import { InvoiceView } from './components/InvoiceView';
 import { AnalysisView } from './components/AnalysisView';
 import { PurchasesList } from './components/PurchasesList';
 import { NotificationDropdown } from './components/NotificationDropdown';
+import { supabase } from './lib/supabase';
+import { LogOut, Download } from 'lucide-react';
 
 import { Login } from './components/Login';
 
 type View = 'dashboard' | 'cards' | 'purchases' | 'invoices' | 'analysis';
 
 export default function App() {
-  const [user, setUser] = useState<{ name: string, identifier: string } | null>(null);
+  const [user, setUser] = React.useState<{ name: string, identifier: string } | null>(null);
   const [activeView, setActiveView] = useState<View>('dashboard');
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
+
+  React.useEffect(() => {
+    // Check active sessions and sets the user
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setUser({
+          name: session.user.user_metadata.full_name || 'Usuário',
+          identifier: session.user.email || ''
+        });
+      }
+      setIsAuthChecking(false);
+    });
+
+    // Listen for changes on auth state (logged in, signed out, etc.)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setUser({
+          name: session.user.user_metadata.full_name || 'Usuário',
+          identifier: session.user.email || ''
+        });
+      } else {
+        setUser(null);
+      }
+      setIsAuthChecking(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setUser(null);
+  };
+
+  const handleBackup = async () => {
+    try {
+      const [
+        { data: cards },
+        { data: purchases },
+        { data: categories },
+        { data: paidInvoices },
+        { data: notifications }
+      ] = await Promise.all([
+        supabase.from('cards').select('*'),
+        supabase.from('purchases').select('*'),
+        supabase.from('categories').select('*'),
+        supabase.from('paid_invoices').select('*'),
+        supabase.from('notifications').select('*')
+      ]);
+
+      const backupData = {
+        exportDate: new Date().toISOString(),
+        user: user?.identifier,
+        data: {
+          cards,
+          purchases,
+          categories,
+          paidInvoices,
+          notifications
+        }
+      };
+
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `crediflow_backup_${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Erro no backup:', error);
+      alert('Erro ao gerar backup dos dados.');
+    }
+  };
 
   const { 
     state, 
     loading,
     addCard, 
+    updateCard,
     addPurchase, 
     addCategory, 
     updateCategory, 
@@ -60,6 +140,21 @@ export default function App() {
   const [preSelectedCardId, setPreSelectedCardId] = useState<string | undefined>(undefined);
 
   const unreadNotifications = (state.notifications || []).filter(n => !n.read).length;
+
+  if (isAuthChecking) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+        <motion.div 
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+          className="mb-4"
+        >
+          <Zap className="text-violet-600" size={48} fill="currentColor" />
+        </motion.div>
+        <p className="text-slate-500 font-medium animate-pulse">Autenticando...</p>
+      </div>
+    );
+  }
 
   if (!user) {
     return <Login onLogin={setUser} />;
@@ -177,8 +272,22 @@ export default function App() {
                  }}
                />
              </div>
+             <button 
+               onClick={handleBackup}
+               className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl hover:bg-violet-50 hover:text-violet-600 hover:border-violet-100 transition-all text-slate-400 group"
+               title="Backup dos dados (JSON)"
+             >
+                <Download size={20} className="group-hover:translate-y-0.5 transition-transform" />
+             </button>
+             <button 
+               onClick={handleLogout}
+               className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl hover:bg-rose-50 hover:text-rose-600 hover:border-rose-100 transition-all text-slate-400 group"
+               title="Sair"
+             >
+                <LogOut size={20} className="group-hover:-translate-x-1 transition-transform" />
+             </button>
              <button className="w-8 h-8 rounded-full bg-violet-100 flex items-center justify-center text-violet-700 font-bold border border-violet-200">
-                L
+                {user.name.charAt(0)}
              </button>
           </div>
         </header>
@@ -204,6 +313,7 @@ export default function App() {
                 <CardsList 
                   cards={state.cards} 
                   onAddCard={addCard} 
+                  onUpdateCard={updateCard}
                   onDeleteCard={deleteCard}
                   onAddPurchase={handleOpenPurchaseModal}
                 />

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Purchase, Category } from '../types';
-import { cn } from '../lib/utils';
+import { cn, formatCurrencyMask, parseCurrency } from '../lib/utils';
 import { X, ShoppingBag, Package, Calendar, CreditCard as CardIcon, Tag, Plus, Trash2, Edit2, Check } from 'lucide-react';
 
 interface PurchaseFormProps {
@@ -104,12 +104,11 @@ export function PurchaseForm({
               </label>
               <input 
                 required
-                type="number" 
-                step="0.01"
+                type="text" 
                 placeholder="0,00"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3.5 text-sm focus:ring-2 focus:ring-violet-500 transition-all font-bold"
-                value={formData.totalValue || ''}
-                onChange={e => setFormData({...formData, totalValue: Number(e.target.value)})}
+                value={formatCurrencyMask((formData.totalValue * 100).toFixed(0))}
+                onChange={e => setFormData({...formData, totalValue: parseCurrency(e.target.value)})}
               />
             </div>
             <div className="space-y-2">

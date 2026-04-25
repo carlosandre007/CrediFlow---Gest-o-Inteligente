@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { CreditCard, Plus, Trash2, Banknote, ShieldCheck } from 'lucide-react';
+import { CreditCard, Plus, Trash2, Banknote, ShieldCheck, Edit2 } from 'lucide-react';
 import { Card } from '../types';
-import { formatCurrency, cn } from '../lib/utils';
+import { formatCurrency, formatCurrencyMask, parseCurrency, cn } from '../lib/utils';
 import { motion } from 'motion/react';
 
 interface CardsListProps {
   cards: Card[];
   onAddCard: (card: Omit<Card, 'id'>) => void;
+  onUpdateCard: (id: string, card: Partial<Omit<Card, 'id'>>) => void;
   onDeleteCard: (id: string) => void;
   onAddPurchase: (cardId: string) => void;
 }
@@ -18,12 +19,14 @@ const COLORS = [
   { name: 'Grafite', hex: '#1e293b' },
   { name: 'Esmeralda', hex: '#10b981' },
   { name: 'Rosa Choque', hex: '#db2777' },
+  { name: 'Amarelo Ouro', hex: '#eab308' },
 ];
 
-const BRANDS = ['Visa', 'Mastercard', 'Elo', 'Amex'];
+const BRANDS = ['Visa', 'Mastercard', 'Elo', 'Amex', 'Hiper'];
 
-export function CardsList({ cards, onAddCard, onDeleteCard, onAddPurchase }: CardsListProps) {
+export function CardsList({ cards, onAddCard, onUpdateCard, onDeleteCard, onAddPurchase }: CardsListProps) {
   const [showAddForm, setShowAddForm] = useState(false);
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [newCard, setNewCard] = useState<Omit<Card, 'id'>>({
     name: '',
     limit: 0,
@@ -36,8 +39,32 @@ export function CardsList({ cards, onAddCard, onDeleteCard, onAddPurchase }: Car
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onAddCard(newCard);
+    if (editingCardId) {
+      onUpdateCard(editingCardId, newCard);
+    } else {
+      onAddCard(newCard);
+    }
+    handleCancel();
+  };
+
+  const handleEdit = (card: Card) => {
+    setNewCard({
+      name: card.name,
+      limit: card.limit,
+      closingDay: card.closingDay,
+      dueDay: card.dueDay,
+      bank: card.bank,
+      brand: card.brand,
+      color: card.color,
+    });
+    setEditingCardId(card.id);
+    setShowAddForm(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleCancel = () => {
     setShowAddForm(false);
+    setEditingCardId(null);
     setNewCard({
       name: '',
       limit: 0,
@@ -53,12 +80,19 @@ export function CardsList({ cards, onAddCard, onDeleteCard, onAddPurchase }: Car
     <div className="space-y-8">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-slate-800">Meus Cartões</h2>
+          <h2 className="text-2xl font-bold text-slate-800">
+            {editingCardId ? 'Editando Cartão' : 'Meus Cartões'}
+          </h2>
           <p className="text-slate-500">Gerencie seus limites e datas de fechamento.</p>
         </div>
         <button 
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-bold shadow-lg shadow-violet-200 transition-all active:scale-95"
+          onClick={() => (showAddForm ? handleCancel() : setShowAddForm(true))}
+          className={cn(
+            "px-4 py-2 rounded-xl flex items-center gap-2 text-sm font-bold transition-all active:scale-95 shadow-lg",
+            showAddForm 
+              ? "bg-slate-200 text-slate-600 hover:bg-slate-300 shadow-slate-100" 
+              : "bg-violet-600 text-white hover:bg-violet-700 shadow-violet-200"
+          )}
         >
           {showAddForm ? 'Cancelar' : <><Plus size={18}/> Novo Cartão</>}
         </button>
@@ -85,12 +119,12 @@ export function CardsList({ cards, onAddCard, onDeleteCard, onAddPurchase }: Car
             <div className="space-y-2">
               <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Limite Total (R$)</label>
               <input 
-                type="number" 
+                type="text" 
                 required
                 placeholder="0,00"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-violet-500 transition-all"
-                value={newCard.limit || ''}
-                onChange={e => setNewCard({...newCard, limit: Number(e.target.value)})}
+                value={formatCurrencyMask((newCard.limit * 100).toFixed(0))}
+                onChange={e => setNewCard({...newCard, limit: parseCurrency(e.target.value)})}
               />
             </div>
             <div className="space-y-2">
@@ -160,7 +194,7 @@ export function CardsList({ cards, onAddCard, onDeleteCard, onAddPurchase }: Car
                 type="submit"
                 className="w-full bg-violet-600 text-white rounded-xl py-3 font-bold shadow-lg shadow-violet-200 hover:bg-violet-700 transition-all active:scale-95"
               >
-                Salvar Cartão
+                {editingCardId ? 'Salvar Alterações' : 'Salvar Cartão'}
               </button>
             </div>
           </form>
@@ -238,13 +272,23 @@ export function CardsList({ cards, onAddCard, onDeleteCard, onAddPurchase }: Car
                   </button>
                </motion.div>
 
-               {/* Delete Action Overlay (Hidden by default, shown on hover/touch) */}
-               <button 
-                 onClick={() => onDeleteCard(card.id)}
-                 className="absolute -top-3 -right-3 w-10 h-10 bg-white text-rose-500 rounded-full shadow-lg border border-rose-100 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity active:scale-95 z-10"
-               >
-                 <Trash2 size={18} />
-               </button>
+               {/* Action Buttons Overlay */}
+               <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                 <button 
+                   onClick={() => handleEdit(card)}
+                   className="w-9 h-9 bg-white text-violet-600 rounded-full shadow-lg border border-violet-100 flex items-center justify-center active:scale-95 transition-all"
+                   title="Editar cartão"
+                 >
+                   <Edit2 size={16} />
+                 </button>
+                 <button 
+                   onClick={() => onDeleteCard(card.id)}
+                   className="w-9 h-9 bg-white text-rose-500 rounded-full shadow-lg border border-rose-100 flex items-center justify-center active:scale-95 transition-all"
+                   title="Excluir cartão"
+                 >
+                   <Trash2 size={16} />
+                 </button>
+               </div>
             </motion.div>
           ))
         )}
