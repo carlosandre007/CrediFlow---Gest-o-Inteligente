@@ -36,6 +36,7 @@ import { supabase } from './lib/supabase';
 import { LogOut, Download } from 'lucide-react';
 
 import { Login } from './components/Login';
+import { InstallPWA } from './components/InstallPWA';
 
 type View = 'dashboard' | 'cards' | 'purchases' | 'invoices' | 'analysis';
 
@@ -392,6 +393,8 @@ export default function App() {
           </motion.div>
         </div>
       )}
+      {/* PWA Install Prompt */}
+      <InstallPWA />
     </div>
   );
 }

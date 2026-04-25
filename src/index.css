@@ -7,14 +7,26 @@
 }
 
 @layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+  
   body {
-    @apply font-sans;
+    @apply font-sans overflow-x-hidden;
+    touch-action: manipulation;
+  }
+
+  button, a {
+    user-select: none;
+    -webkit-user-drag: none;
   }
 }
 
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   @apply bg-slate-100;
@@ -24,4 +36,11 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-slate-400;
+}
+
+/* PWA Splash Screen & Mobile fixes */
+@media (max-width: 640px) {
+  input, select, textarea {
+    font-size: 16px !important; /* Evita zoom automático no iOS */
+  }
 }
