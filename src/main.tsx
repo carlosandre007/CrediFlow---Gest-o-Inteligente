@@ -2,10 +2,15 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
-import { registerSW } from 'virtual:pwa-register';
-
-// Registra o Service Worker do PWA
-registerSW({ immediate: true });
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').then((registration) => {
+      console.log('SW registrado com sucesso:', registration.scope);
+    }).catch((error) => {
+      console.log('Erro ao registrar SW:', error);
+    });
+  });
+}
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
