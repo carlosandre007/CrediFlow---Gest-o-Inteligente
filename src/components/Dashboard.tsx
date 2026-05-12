@@ -11,7 +11,10 @@ import {
   Target,
   PiggyBank,
   Receipt,
-  Upload
+  Upload,
+  Edit2,
+  Trash2,
+  Plus
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -34,6 +37,8 @@ interface DashboardProps {
   state: FinancialState;
   installments: Installment[];
   onAddPurchase: () => void;
+  onEditPurchase: (purchase: any) => void;
+  onDeletePurchase: (id: string) => Promise<void>;
   payInvoice: (cardId: string, month: number, year: number, totalAmount: number, paidAmount: number) => Promise<void>;
   bulkImportPurchases: (purchases: any[]) => Promise<void>;
 }
@@ -56,12 +61,13 @@ function getCardCycleForMonth(card: Card, targetMonth: Date) {
   return { start, end, due };
 }
 
-export function Dashboard({ state, installments = [], onAddPurchase, payInvoice, bulkImportPurchases }: DashboardProps) {
+export function Dashboard({ state, installments = [], onAddPurchase, onEditPurchase, onDeletePurchase, payInvoice, bulkImportPurchases }: DashboardProps) {
   if (!state || !state.cards) {
     return <div className="p-8 text-center text-slate-500">Carregando dados do dashboard...</div>;
   }
 
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [showBulkOptions, setShowBulkOptions] = useState(false);
 
   const [selectedCardForDetail, setSelectedCardForDetail] = useState<Card | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<Date>(startOfMonth(new Date()));
@@ -85,13 +91,10 @@ export function Dashboard({ state, installments = [], onAddPurchase, payInvoice,
       const card = state.cards.find(c => c.id === inst.cardId);
       if (!card) return false;
 
-      // Descobrir a qual "fatura/mês" essa parcela cai baseado no closing day
-      let targetInvoiceDate = new Date(inst.date);
-      if (targetInvoiceDate.getDate() >= card.closingDay) {
-        targetInvoiceDate = addMonths(targetInvoiceDate, 1);
-      }
-      const invMonth = targetInvoiceDate.getMonth() + 1; // 1-12
-      const invYear = targetInvoiceDate.getFullYear();
+      // Usamos diretamente o mês e ano da parcela que já foram calculados 
+      // na função generateInstallments (finance.ts) levando em conta o fechamento.
+      const invMonth = inst.month + 1; // Convertendo 0-11 para 1-12
+      const invYear = inst.year;
 
       // Verifica se a invoice dessa data já está paga/fechada no banco
       const isPaid = state.invoices?.some(i => 
@@ -274,11 +277,11 @@ export function Dashboard({ state, installments = [], onAddPurchase, payInvoice,
         </div>
         <div className="flex items-center gap-3">
             <button 
-              onClick={() => setIsImportModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm"
+              onClick={() => setShowBulkOptions(true)}
+              className="flex items-center gap-2 px-5 py-2.5 bg-violet-600 text-white rounded-xl font-bold hover:bg-violet-700 transition-all shadow-lg shadow-violet-200 active:scale-95"
             >
               <Upload size={18} />
-              <span className="hidden sm:inline">Importar CSV</span>
+              <span>Adição em Massa</span>
             </button>
             <div className="bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm flex items-center gap-3 text-sm">
               <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
@@ -541,22 +544,65 @@ export function Dashboard({ state, installments = [], onAddPurchase, payInvoice,
                   const daysToDue = Math.ceil((dueDate.getTime() - today.getTime()) / (1000 * 3600 * 24));
                   const isDueSoon = daysToDue <= 5; // Aparece sempre que faltar 5 dias ou menos (mesmo atrasado)
 
-                  if (isDueSoon && card.currentInvoice > 0) {
+                  if (card.currentInvoice > 0 && isDueSoon) {
                     return (
                       <button 
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          
+                          const cardId = card.id;
+                          const originalCard = state.cards.find(c => c.id === cardId);
+                          
+                          if (!originalCard) return;
+
                           const invMonth = selectedMonth.getMonth() + 1;
                           const invYear = selectedMonth.getFullYear();
-                          setPaymentModalCard({ card: state.cards.find(c => c.id === card.id)!, invoiceValue: card.currentInvoice, month: invMonth, year: invYear });
+                          
+                          setPaymentModalCard({ 
+                            card: originalCard, 
+                            invoiceValue: card.currentInvoice, 
+                            month: invMonth, 
+                            year: invYear 
+                          });
                           setPaymentAmount(card.currentInvoice.toString());
                         }}
-                        className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl transition-colors shadow-sm flex items-center justify-center gap-2"
+                        className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 active:scale-95"
                       >
                         <CheckCircle size={16} /> Realizar Pagamento
                       </button>
                     );
                   }
-                  return null;
+
+                  if (card.currentInvoice === 0) {
+                    // Verifica se já existia uma fatura paga para este mês
+                    const invMonth = selectedMonth.getMonth() + 1;
+                    const invYear = selectedMonth.getFullYear();
+                    const hasPaidInvoice = state.invoices?.some(i => 
+                      i.cardId === card.id && i.month === invMonth && i.year === invYear && (i.status === 'PAID' || i.status === 'OVERPAID')
+                    );
+
+                    if (hasPaidInvoice) {
+                      return (
+                        <div className="w-full py-3 bg-emerald-50 border border-emerald-100 text-emerald-600 text-sm font-bold rounded-xl flex items-center justify-center gap-2">
+                          <CheckCircle size={16} /> Fatura Paga
+                        </div>
+                      );
+                    }
+                  }
+
+                  return (
+                    <button 
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onAddPurchase();
+                      }}
+                      className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 text-sm font-bold rounded-xl transition-all flex items-center justify-center gap-2"
+                    >
+                      <Plus size={16} /> Adicionar Gasto
+                    </button>
+                  );
                 })()}
               </div>
             </div>
@@ -564,74 +610,65 @@ export function Dashboard({ state, installments = [], onAddPurchase, payInvoice,
         </div>
       </div>
 
-      {/* Modal de Pagamento */}
-      <AnimatePresence>
-        {paymentModalCard && (
-          <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setPaymentModalCard(null)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
-            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col">
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg" style={{ backgroundColor: paymentModalCard.card.color }}>
-                    <Wallet size={24} />
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-bold text-slate-800">Pagamento</h3>
-                    <p className="text-sm text-slate-500 font-medium">{paymentModalCard.card.name}</p>
-                  </div>
+      {/* Modal de Pagamento DIRETO (Sem AnimatePresence para isolar erro) */}
+      {paymentModalCard && (
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4">
+          <div onClick={() => setPaymentModalCard(null)} className="absolute inset-0 bg-black/70 backdrop-blur-md" />
+          <div className="relative w-full max-w-md bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col">
+            <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-white shadow-lg" style={{ backgroundColor: paymentModalCard.card.color }}>
+                  <Wallet size={24} />
                 </div>
-                <button onClick={() => setPaymentModalCard(null)} className="p-2 hover:bg-white rounded-full transition-colors text-slate-400 shadow-sm">
-                  <AlertCircle className="rotate-45" size={24} />
-                </button>
-              </div>
-
-              <div className="p-6 space-y-6">
-                <div className="text-center p-6 bg-slate-50 rounded-2xl border border-slate-100">
-                   <p className="text-sm text-slate-500 font-medium mb-1">Valor Total da Fatura</p>
-                   <p className="text-3xl font-black text-slate-800">{formatCurrency(paymentModalCard.invoiceValue)}</p>
-                </div>
-
                 <div>
-                  <label className="block text-sm font-bold text-slate-700 mb-2">Valor Pago</label>
-                  <div className="relative">
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-medium">R$</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={paymentAmount}
-                      onChange={(e) => setPaymentAmount(e.target.value)}
-                      className="w-full pl-12 pr-4 py-3 bg-white border-2 border-slate-100 rounded-xl focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 outline-none transition-all text-slate-700 font-bold"
-                      placeholder="0,00"
-                    />
-                  </div>
-                  <p className="text-xs text-slate-500 mt-2">
-                    Pagamento menor gera dívida. Pagamento maior gera crédito na próxima fatura.
-                  </p>
+                  <h3 className="text-xl font-bold text-slate-800">Pagamento</h3>
+                  <p className="text-sm text-slate-500 font-medium">{paymentModalCard.card.name}</p>
                 </div>
-
-                <button 
-                  onClick={async () => {
-                    const paid = parseFloat(paymentAmount.replace(',', '.'));
-                    if (isNaN(paid) || paid <= 0) return alert('Insira um valor válido');
-                    
-                    await payInvoice(
-                      paymentModalCard.card.id,
-                      paymentModalCard.month,
-                      paymentModalCard.year,
-                      paymentModalCard.invoiceValue,
-                      paid
-                    );
-                    setPaymentModalCard(null);
-                  }}
-                  className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 transition-all active:scale-[0.98]"
-                >
-                  Confirmar Pagamento
-                </button>
               </div>
-            </motion.div>
+              <button onClick={() => setPaymentModalCard(null)} className="text-slate-400 p-2">
+                Fechar
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div className="text-center p-6 bg-slate-50 rounded-2xl border border-slate-100">
+                 <p className="text-sm text-slate-500 font-medium mb-1">Valor Total</p>
+                 <p className="text-3xl font-black text-slate-800">{formatCurrency(paymentModalCard.invoiceValue)}</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-2">Valor Pago</label>
+                <input
+                  type="number"
+                  value={paymentAmount}
+                  onChange={(e) => setPaymentAmount(e.target.value)}
+                  className="w-full px-4 py-3 bg-white border-2 border-slate-100 rounded-xl outline-none transition-all text-slate-700 font-bold"
+                />
+              </div>
+
+              <button 
+                onClick={async () => {
+                  const paid = parseFloat(paymentAmount);
+                  if (isNaN(paid) || paid <= 0) return alert('Insira um valor válido');
+                  
+                  await payInvoice(
+                    paymentModalCard.card.id,
+                    paymentModalCard.month,
+                    paymentModalCard.year,
+                    paymentModalCard.invoiceValue,
+                    paid
+                  );
+                  setPaymentModalCard(null);
+                }}
+                className="w-full py-4 bg-indigo-600 text-white font-bold rounded-xl"
+              >
+                Confirmar
+              </button>
+            </div>
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
+
 
       {/* Modal de Detalhes do Cartão */}
       <AnimatePresence>
@@ -682,9 +719,34 @@ export function Dashboard({ state, installments = [], onAddPurchase, payInvoice,
                                     <p className="text-xs text-slate-400">Parcela {inst.installmentNumber}/{inst.totalInstallments}</p>
                                   </div>
                                 </div>
-                                <div className="text-right">
-                                  <p className="font-black text-slate-800 text-sm">{formatCurrency(inst.value)}</p>
-                                  <p className="text-[10px] text-slate-400">{format(new Date(inst.date), 'dd/MM/yyyy')}</p>
+                                <div className="flex items-center gap-6">
+                                  <div className="text-right">
+                                    <p className="font-black text-slate-800 text-sm">{formatCurrency(inst.value)}</p>
+                                    <p className="text-[10px] text-slate-400">{format(new Date(inst.date), 'dd/MM/yyyy')}</p>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <button 
+                                      onClick={() => {
+                                        const p = state.purchases.find(p => p.id === inst.purchaseId);
+                                        if (p) onEditPurchase(p);
+                                      }}
+                                      className="p-2 hover:bg-slate-100 text-slate-400 hover:text-violet-600 rounded-lg transition-colors"
+                                      title="Editar"
+                                    >
+                                      <Edit2 size={14} />
+                                    </button>
+                                    <button 
+                                      onClick={async () => {
+                                        if (confirm('Deseja excluir este lançamento completo?')) {
+                                          await onDeletePurchase(inst.purchaseId);
+                                        }
+                                      }}
+                                      className="p-2 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition-colors"
+                                      title="Excluir"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
                                 </div>
                               </div>
                             ))}
@@ -698,6 +760,67 @@ export function Dashboard({ state, installments = [], onAddPurchase, payInvoice,
               <div className="p-6 bg-slate-50 border-t border-slate-100">
                 <button onClick={() => setSelectedCardForDetail(null)} className="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95">Fechar</button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal de Opções de Adição em Massa */}
+      <AnimatePresence>
+        {showBulkOptions && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowBulkOptions(false)} className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden p-8">
+               <div className="text-center mb-8">
+                  <div className="w-16 h-16 bg-violet-100 text-violet-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                     <Upload size={32} />
+                  </div>
+                  <h3 className="text-2xl font-bold text-slate-800">Como deseja importar?</h3>
+                  <p className="text-slate-500">Escolha o método mais rápido para seus lançamentos.</p>
+               </div>
+
+               <div className="grid grid-cols-1 gap-4">
+                  <button 
+                    onClick={() => {
+                      setShowBulkOptions(false);
+                      setIsImportModalOpen(true);
+                    }}
+                    className="flex items-center gap-6 p-6 bg-slate-50 border-2 border-slate-100 rounded-2xl hover:border-violet-200 hover:bg-violet-50/30 transition-all group text-left"
+                  >
+                    <div className="w-14 h-14 bg-white rounded-xl shadow-sm flex items-center justify-center text-slate-400 group-hover:text-violet-600 transition-colors">
+                       <Receipt size={28} />
+                    </div>
+                    <div>
+                       <p className="font-bold text-slate-800">Arquivo CSV / Excel</p>
+                       <p className="text-xs text-slate-500">Ideal para exportações direto do banco.</p>
+                    </div>
+                  </button>
+
+                  <button 
+                    onClick={() => {
+                      setShowBulkOptions(false);
+                      // Dispara o evento para o App.tsx abrir o scanner
+                      const event = new CustomEvent('openScanner');
+                      window.dispatchEvent(event);
+                    }}
+                    className="flex items-center gap-6 p-6 bg-slate-50 border-2 border-slate-100 rounded-2xl hover:border-violet-200 hover:bg-violet-50/30 transition-all group text-left"
+                  >
+                    <div className="w-14 h-14 bg-white rounded-xl shadow-sm flex items-center justify-center text-slate-400 group-hover:text-violet-600 transition-colors">
+                       <Zap size={28} />
+                    </div>
+                    <div>
+                       <p className="font-bold text-slate-800">Scanner de Fatura (IA)</p>
+                       <p className="text-xs text-slate-500">Tire foto ou suba um PDF para leitura automática.</p>
+                    </div>
+                  </button>
+               </div>
+
+               <button 
+                onClick={() => setShowBulkOptions(false)}
+                className="w-full mt-8 py-4 text-slate-400 font-bold hover:text-slate-600 transition-colors"
+               >
+                 Cancelar
+               </button>
             </motion.div>
           </div>
         )}

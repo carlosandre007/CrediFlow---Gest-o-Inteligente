@@ -298,15 +298,19 @@ export function useFinancialData() {
         adjustmentType = 'OVERPAYMENT';
       }
 
-      // Create Invoice
-      const { data: invoiceData, error: invoiceError } = await supabase.from('invoices').insert([{
-        card_id: cardId,
-        month,
-        year,
-        total_amount: totalAmount,
-        paid_amount: paidAmount,
-        status
-      }]).select().single();
+      // Create or Update Invoice (Upsert)
+      const { data: invoiceData, error: invoiceError } = await supabase
+        .from('invoices')
+        .upsert([{
+          card_id: cardId,
+          month,
+          year,
+          total_amount: totalAmount,
+          paid_amount: paidAmount,
+          status
+        }], { onConflict: 'card_id,month,year' })
+        .select()
+        .single();
 
       if (invoiceError) throw invoiceError;
 
@@ -322,10 +326,15 @@ export function useFinancialData() {
         paidAt: invoiceData.paid_at
       };
 
-      setState(prev => ({
-        ...prev,
-        invoices: [...prev.invoices, newInvoice]
-      }));
+      setState(prev => {
+        const otherInvoices = prev.invoices.filter(i => 
+          !(i.cardId === cardId && i.month === month && i.year === year)
+        );
+        return {
+          ...prev,
+          invoices: [...otherInvoices, newInvoice]
+        };
+      });
 
       // Create Adjustment if needed
       if (adjustmentAmount !== 0) {

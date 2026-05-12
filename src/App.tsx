@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   CreditCard, 
@@ -148,6 +148,12 @@ export default function App() {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
 
   const unreadNotifications = (state.notifications || []).filter(n => !n.read).length;
+
+  useEffect(() => {
+    const handleOpenScanner = () => setIsScannerOpen(true);
+    window.addEventListener('openScanner', handleOpenScanner);
+    return () => window.removeEventListener('openScanner', handleOpenScanner);
+  }, []);
 
   if (isAuthChecking) {
     return (
@@ -336,6 +342,8 @@ export default function App() {
                   state={state} 
                   installments={allInstallments} 
                   onAddPurchase={() => handleOpenPurchaseModal()}
+                  onEditPurchase={handleEditPurchase}
+                  onDeletePurchase={deletePurchase}
                   payInvoice={payInvoice}
                   bulkImportPurchases={bulkImportPurchases}
                 />
@@ -364,6 +372,9 @@ export default function App() {
                   installments={allInstallments} 
                   paidInvoices={state.paidInvoices || []}
                   onTogglePaid={toggleInvoicePaid}
+                  onEditPurchase={handleEditPurchase}
+                  onDeletePurchase={deletePurchase}
+                  purchases={state.purchases}
                 />
               )}
               {activeView === 'analysis' && (

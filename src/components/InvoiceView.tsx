@@ -1,19 +1,19 @@
 import React, { useMemo, useState } from 'react';
 import { Card, Installment, InvoiceStatus } from '../types';
 import { formatCurrency, cn } from '../lib/utils';
-import { ChevronLeft, ChevronRight, CheckCircle2, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CheckCircle2, Clock, Edit2, Trash2, Plus } from 'lucide-react';
 import { format, addMonths } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface InvoiceViewProps {
-  cards: Card[];
-  installments: Installment[];
-  paidInvoices: string[];
   onTogglePaid: (cardId: string, month: number, year: number) => void;
+  onEditPurchase: (purchase: any) => void;
+  onDeletePurchase: (id: string) => Promise<void>;
+  purchases: any[];
 }
 
-export function InvoiceView({ cards, installments, paidInvoices, onTogglePaid }: InvoiceViewProps) {
+export function InvoiceView({ cards, installments, paidInvoices, onTogglePaid, onEditPurchase, onDeletePurchase, purchases }: InvoiceViewProps) {
   const [selectedMonthOffset, setSelectedMonthOffset] = useState(0);
   const targetDate = useMemo(() => addMonths(new Date(), selectedMonthOffset), [selectedMonthOffset]);
   const month = targetDate.getMonth();
@@ -62,9 +62,17 @@ export function InvoiceView({ cards, installments, paidInvoices, onTogglePaid }:
              <ChevronRight size={24} />
            </button>
         </div>
-        <div className="text-right">
-           <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total do Mês</p>
-           <p className="text-2xl font-black text-slate-800">{formatCurrency(totalMonth)}</p>
+        <div className="flex items-center gap-4">
+           <div className="text-right">
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Total do Mês</p>
+              <p className="text-2xl font-black text-slate-800">{formatCurrency(totalMonth)}</p>
+           </div>
+           <button 
+            onClick={() => onEditPurchase(null)}
+            className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-lg shadow-violet-100 transition-all flex items-center gap-2 active:scale-95"
+           >
+             <Plus size={16} /> Novo Lançamento
+           </button>
         </div>
       </div>
 
@@ -117,7 +125,32 @@ export function InvoiceView({ cards, installments, paidInvoices, onTogglePaid }:
                              <p className="text-[10px] text-slate-400">Parcela {inst.installmentNumber} de {inst.totalInstallments}</p>
                           </div>
                        </div>
-                       <p className="text-sm font-bold text-slate-600">{formatCurrency(inst.value)}</p>
+                       <div className="flex items-center gap-4">
+                         <p className="text-sm font-bold text-slate-600">{formatCurrency(inst.value)}</p>
+                         <div className="flex items-center gap-1">
+                            <button 
+                              onClick={() => {
+                                const p = purchases.find(p => p.id === inst.purchaseId);
+                                if (p) onEditPurchase(p);
+                              }}
+                              className="p-2 hover:bg-slate-100 text-slate-400 hover:text-blue-600 rounded-lg transition-colors"
+                              title="Editar"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                            <button 
+                              onClick={async () => {
+                                if (confirm('Excluir este lançamento completo?')) {
+                                  await onDeletePurchase(inst.purchaseId);
+                                }
+                              }}
+                              className="p-2 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition-colors"
+                              title="Excluir"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                         </div>
+                       </div>
                     </div>
                   ))
                 )}
