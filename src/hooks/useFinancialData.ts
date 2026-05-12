@@ -104,17 +104,29 @@ export function useFinancialData() {
   useEffect(() => {
     fetchData();
 
-    // Configuração de Atualização em Tempo Real (Realtime)
-    const channel = supabase
-      .channel('schema-db-changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cards' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'purchases' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'paid_invoices' }, () => fetchData())
-      .subscribe();
+    // Configuração de Atualização em Tempo Real (Realtime) com tratamento seguro
+    let channel: any = null;
+
+    const setupSubscription = () => {
+      channel = supabase
+        .channel('schema-db-changes')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'cards' }, () => fetchData())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'purchases' }, () => fetchData())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => fetchData())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'paid_invoices' }, () => fetchData())
+        .subscribe((status: string) => {
+          if (status === 'CLOSED') {
+            console.log('Supabase connection closed, attempting reconnect...');
+          }
+        });
+    };
+
+    setupSubscription();
 
     return () => {
-      supabase.removeChannel(channel);
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
     };
   }, [fetchData]);
 

@@ -337,6 +337,7 @@ export default function App() {
                   installments={allInstallments} 
                   onAddPurchase={() => handleOpenPurchaseModal()}
                   payInvoice={payInvoice}
+                  bulkImportPurchases={bulkImportPurchases}
                 />
               )}
               {activeView === 'cards' && (

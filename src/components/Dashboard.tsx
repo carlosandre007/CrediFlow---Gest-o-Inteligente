@@ -10,7 +10,8 @@ import {
   Zap,
   Target,
   PiggyBank,
-  Receipt
+  Receipt,
+  Upload
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -22,8 +23,9 @@ import {
   ResponsiveContainer
 } from 'recharts';
 import { FinancialState, Installment, Card } from '../types';
-import { formatCurrency, cn } from '../lib/utils';
-import { startOfMonth, subMonths, format, addMonths, isWithinInterval, addDays, set, isSameMonth, startOfDay, endOfDay } from 'date-fns';
+import { formatCurrency, cn, getDueStatus } from '../lib/utils';
+import { CSVImporter } from './CSVImporter';
+import { startOfMonth, subMonths, format, addMonths, isWithinInterval, addDays, set, isSameMonth, startOfDay, endOfDay, differenceInDays } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { motion, AnimatePresence } from 'motion/react';
 import { ChevronLeft, ChevronRight, CheckCircle } from 'lucide-react';
@@ -33,6 +35,7 @@ interface DashboardProps {
   installments: Installment[];
   onAddPurchase: () => void;
   payInvoice: (cardId: string, month: number, year: number, totalAmount: number, paidAmount: number) => Promise<void>;
+  bulkImportPurchases: (purchases: any[]) => Promise<void>;
 }
 
 // Utilitário para descobrir o ciclo exato do cartão em um dado mês alvo
@@ -53,10 +56,12 @@ function getCardCycleForMonth(card: Card, targetMonth: Date) {
   return { start, end, due };
 }
 
-export function Dashboard({ state, installments = [], onAddPurchase, payInvoice }: DashboardProps) {
+export function Dashboard({ state, installments = [], onAddPurchase, payInvoice, bulkImportPurchases }: DashboardProps) {
   if (!state || !state.cards) {
     return <div className="p-8 text-center text-slate-500">Carregando dados do dashboard...</div>;
   }
+
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   const [selectedCardForDetail, setSelectedCardForDetail] = useState<Card | null>(null);
   const [selectedMonth, setSelectedMonth] = useState<Date>(startOfMonth(new Date()));
@@ -182,30 +187,55 @@ export function Dashboard({ state, installments = [], onAddPurchase, payInvoice 
         available,
         cycle
       };
-    }).filter(c => c.currentInvoice > 0); // BUG FIX: Não exibir cartão sem fatura aberta no mês
+    }).filter(c => c.currentInvoice > 0);
   }, [state.cards, pendingInstallments, currentMonthInstallments, selectedMonth]);
 
-  // Alertas de Vencimento (mantido como proximidade de 6 dias, mas usando o total devido do cartão no ciclo/mês atual)
+  // Alertas de Vencimento: Agrupa parcelas pendentes por cartão e fatura para identificar vencimentos reais
   const dueSoonCards = useMemo(() => {
-    return state.cards.map(card => {
-      let dueDate = set(new Date(), { date: card.dueDay, hours: 0, minutes: 0, seconds: 0 });
-      if (dueDate < today && card.dueDay < today.getDate()) {
+    if (!state.cards || !pendingInstallments.length) return [];
+
+    const alerts: (Card & { dueDate: Date, totalValue: number })[] = [];
+
+    // Agrupar parcelas por cartão e competência (mês/ano)
+    const groups: Record<string, { total: number, card: Card, month: number, year: number }> = {};
+
+    pendingInstallments.forEach(inst => {
+      const card = state.cards.find(c => c.id === inst.cardId);
+      if (!card) return;
+
+      const key = `${inst.cardId}-${inst.month}-${inst.year}`;
+      if (!groups[key]) {
+        groups[key] = { total: 0, card, month: inst.month, year: inst.year };
+      }
+      groups[key].total += inst.value;
+    });
+
+    Object.values(groups).forEach(group => {
+      const { card, month, year, total } = group;
+      
+      // Calcular a data de vencimento real daquela fatura específica
+      // Regra: Se dueDay < closingDay, o vencimento é no mês seguinte ao fechamento.
+      // No sistema, inst.month já reflete o mês da fatura (fechamento).
+      let dueDate = new Date(year, month, card.dueDay);
+      
+      if (card.dueDay < card.closingDay) {
         dueDate = addMonths(dueDate, 1);
       }
 
-      const isDueSoon = isWithinInterval(dueDate, { start: today, end: next6Days });
-      
-      if (isDueSoon) {
-        // Verifica quanto falta pagar da fatura do mês atual do alerta
-        const value = pendingInstallments
-          .filter(inst => inst.cardId === card.id && isSameMonth(new Date(inst.date), dueDate))
-          .reduce((s, i) => s + i.value, 0);
-        
-        return value > 0 ? { ...card, dueDate, totalValue: value } : null;
+      const diff = differenceInDays(startOfDay(dueDate), today);
+
+      // Critério: Vencido (diff < 0) ou vence nos próximos 10 dias
+      if (diff <= 10 && total > 0) {
+        alerts.push({
+          ...card,
+          dueDate,
+          totalValue: total
+        });
       }
-      return null;
-    }).filter(Boolean) as (Card & { dueDate: Date, totalValue: number })[];
-  }, [state.cards, pendingInstallments, today, next6Days]);
+    });
+
+    return alerts;
+  }, [state.cards, pendingInstallments, today]);
 
   // Chart data: 6 meses a partir do selecionado
   const chartData = useMemo(() => {
@@ -243,15 +273,22 @@ export function Dashboard({ state, installments = [], onAddPurchase, payInvoice 
           </div>
         </div>
         <div className="flex items-center gap-3">
-           <div className="bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm flex items-center gap-3 text-sm">
-             <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
-               <TrendingUp size={16} />
-             </div>
-             <div>
-               <p className="text-slate-400 leading-none mb-1">Score CrediFlow</p>
-               <p className="font-bold text-emerald-600">842</p>
-             </div>
-           </div>
+            <button 
+              onClick={() => setIsImportModalOpen(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-slate-600 rounded-xl font-bold hover:bg-slate-50 transition-all shadow-sm"
+            >
+              <Upload size={18} />
+              <span className="hidden sm:inline">Importar CSV</span>
+            </button>
+            <div className="bg-white px-4 py-2 rounded-xl border border-slate-200 shadow-sm flex items-center gap-3 text-sm">
+              <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                <TrendingUp size={16} />
+              </div>
+              <div>
+                <p className="text-slate-400 leading-none mb-1">Score CrediFlow</p>
+                <p className="font-bold text-emerald-600">842</p>
+              </div>
+            </div>
         </div>
       </div>
 
@@ -384,20 +421,43 @@ export function Dashboard({ state, installments = [], onAddPurchase, payInvoice 
                     <div className="flex-1">
                       <h4 className="font-bold text-rose-900 mb-3">Vencendo nos próximos 6 dias</h4>
                       <div className="space-y-3">
-                        {dueSoonCards.map(card => (
-                          <div key={card.id} className="flex items-center justify-between bg-white/50 p-3 rounded-xl border border-rose-200/50">
-                            <div className="flex items-center gap-3">
-                              <div className="w-2 h-8 rounded-full" style={{ backgroundColor: card.color }}></div>
-                              <div>
-                                <p className="text-sm font-bold text-slate-800">{card.name}</p>
-                                <p className="text-[10px] text-rose-600 font-medium">Vence dia {format(card.dueDate, 'dd/MM')}</p>
+                        {dueSoonCards.sort((a, b) => a.dueDate.getTime() - b.dueDate.getTime()).map((card) => {
+                          if (!card.dueDate || isNaN(card.dueDate.getTime())) return null;
+                          const status = getDueStatus(card.dueDate);
+                          
+                          return (
+                            <motion.div 
+                              layout
+                              initial={{ opacity: 0, y: 10 }}
+                              animate={{ opacity: 1, y: 0 }}
+                              key={`${card.id}-${card.dueDate.toISOString()}`} 
+                              className="flex items-center justify-between bg-white/80 backdrop-blur-md p-4 rounded-2xl border border-white/50 shadow-sm hover:shadow-lg transition-all group relative overflow-hidden"
+                            >
+                              <div className="absolute left-0 top-0 bottom-0 w-1" style={{ backgroundColor: card.color }}></div>
+                              <div className="flex items-center gap-4">
+                                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-sm" style={{ backgroundColor: card.color }}>
+                                  <CreditCard size={18} />
+                                </div>
+                                <div>
+                                  <p className="text-sm font-bold text-slate-800 group-hover:text-violet-600 transition-colors">{card.name}</p>
+                                  <p className="text-[11px] text-slate-400 font-medium">Vence dia {format(card.dueDate, 'dd/MM')}</p>
+                                </div>
                               </div>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-sm font-black text-rose-600">{formatCurrency(card.totalValue)}</p>
-                            </div>
-                          </div>
-                        ))}
+                              <div className="flex flex-col items-end gap-1.5">
+                                <p className="text-sm font-black text-slate-900">{formatCurrency(card.totalValue)}</p>
+                                <div className={cn(
+                                  "flex items-center gap-1.5 px-2.5 py-1 rounded-lg border shadow-sm transition-all text-[10px] font-bold",
+                                  status.color
+                                )}>
+                                  {status.icon === 'clock' && <Zap size={10} className="animate-pulse" />}
+                                  {status.icon === 'alert' && <AlertCircle size={10} />}
+                                  {status.icon === 'calendar' && <Calendar size={10} />}
+                                  {status.label}
+                                </div>
+                              </div>
+                            </motion.div>
+                          );
+                        })}
                       </div>
                     </div>
                  </div>
@@ -642,6 +702,26 @@ export function Dashboard({ state, installments = [], onAddPurchase, payInvoice 
           </div>
         )}
       </AnimatePresence>
+
+      {isImportModalOpen && (
+        <CSVImporter 
+          cards={state.cards}
+          categories={state.categories}
+          existingPurchases={state.purchases}
+          onImport={async (transactions) => {
+            const mapped = transactions.map(t => ({
+              name: t.description,
+              totalValue: t.value,
+              installments: t.installments,
+              cardId: t.cardId,
+              categoryId: t.categoryId,
+              date: t.date.toISOString(),
+            }));
+            await bulkImportPurchases(mapped);
+          }}
+          onClose={() => setIsImportModalOpen(false)}
+        />
+      )}
     </div>
   );
 }
